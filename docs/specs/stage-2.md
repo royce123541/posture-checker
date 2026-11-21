@@ -1,4 +1,5 @@
-Status: draft
+Status: approved
+Approved by the owner on 2026-11-21 with all six recommended answers accepted.
 
 # Stage 2: Background app
 
