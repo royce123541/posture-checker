@@ -21,6 +21,8 @@ from posture_checker import actions, paths
 from posture_checker import tray as tray_mod
 from posture_checker.calibrate_flow import Launcher, gui_command, launch, run_calibration
 from posture_checker.monitor import CAMERA_UNAVAILABLE, PAUSED, Monitor, Sample
+from posture_checker.platform.camera_usage import RegistryCameraUsage, filetime_now
+from posture_checker.platform.registry import Registry
 from posture_checker.platform.single_instance import InstanceLock
 from posture_checker.policy.pausing import CALIBRATING, PauseSupervisor
 from posture_checker.settings_ui import ConfigWatcher
@@ -280,6 +282,20 @@ class App:
 QUIT_JOIN_S = 4.0
 
 
+def build_camera_usage(registry: Registry, db: Database) -> RegistryCameraUsage:
+    """The app's camera-in-use probe: logs to the db and has the stale check on.
+
+    Passing the real FILETIME clock is what turns on the 12 h stale-entry check,
+    so this wiring lives here, where a test covers it, rather than in main().
+    """
+
+    def log_probe_event(text: str) -> None:
+        log.warning(text)
+        db.log_event(time.time(), "camera_probe", text)
+
+    return RegistryCameraUsage(registry, log_event=log_probe_event, now_filetime=filetime_now)
+
+
 def claim_single_instance(
     lock: InstanceLock,
     notifier: AppNotifier,
@@ -316,21 +332,13 @@ def main() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
     from posture_checker.capture.pose import PoseEstimator
     from posture_checker.config import load_config
     from posture_checker.inference.rules import RulesModel
-    from posture_checker.platform.camera_usage import RegistryCameraUsage, filetime_now
     from posture_checker.platform.power import PsutilBattery, WindowsLockState
     from posture_checker.platform.registry import WinRegistry
 
     config = load_config()
     db = Database()
-
-    def log_probe_event(text: str) -> None:
-        log.warning(text)
-        db.log_event(time.time(), "camera_probe", text)
-
     supervisor = PauseSupervisor(
-        camera_usage=RegistryCameraUsage(
-            WinRegistry(), log_event=log_probe_event, now_filetime=filetime_now
-        ),
+        camera_usage=build_camera_usage(WinRegistry(), db),
         lock_state=WindowsLockState(),
         battery=PsutilBattery(),
         battery_pause_percent=config.battery_pause_percent,

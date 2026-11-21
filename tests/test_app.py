@@ -354,3 +354,19 @@ def test_tray_status_follows_pause_and_resume_without_a_monitor_step(
     assert app.status() == ("grey", "Paused: by you")
     app.tray_actions()[tray.RESUME]()
     assert app.status()[0] == "green"
+
+
+def test_app_camera_probe_has_the_stale_check_on(db) -> None:
+    """main() builds its probe here; it must pass a real FILETIME clock."""
+    from posture_checker.app import build_camera_usage
+    from posture_checker.platform.camera_usage import filetime_now
+
+    hour = 3600 * 10_000_000
+    registry = FakeRegistry()
+    now = filetime_now()
+    registry.add_app("NonPackaged\\C:#A#Crashed.exe", now - 13 * hour, 0)
+    registry.add_app("NonPackaged\\C:#A#Zoom.exe", now - hour, 0)
+    assert build_camera_usage(registry, db).apps_in_use() == ["Zoom.exe"]
+    events = db.query("SELECT kind, detail FROM events")
+    assert [r["kind"] for r in events] == ["camera_probe"]
+    assert "Crashed.exe" in events[0]["detail"]
