@@ -74,6 +74,20 @@ CREATE TABLE IF NOT EXISTS events (
     kind   TEXT NOT NULL,
     detail TEXT
 );
+
+-- User-given labels ("I'm slouching now" in the tray), for training in Stage 5.
+-- sample_id links to the latest stored sample when there was one recently, with
+-- the label the model predicted for it, so false negatives can be counted.
+CREATE TABLE IF NOT EXISTS labels (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts              REAL NOT NULL,
+    label           TEXT NOT NULL,
+    source          TEXT NOT NULL,     -- 'tray'
+    sample_id       INTEGER REFERENCES samples(id),
+    model_version   TEXT,
+    predicted_label TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_labels_ts ON labels(ts);
 """
 
 
@@ -227,6 +241,30 @@ class Database:
     def last_alert(self) -> sqlite3.Row | None:
         rows = self.query("SELECT * FROM alerts ORDER BY id DESC LIMIT 1")
         return rows[0] if rows else None
+
+    # --- labels -------------------------------------------------------------
+    def latest_sample_since(self, ts: float) -> sqlite3.Row | None:
+        """The newest stored sample at or after ``ts``, if any."""
+        rows = self.query(
+            "SELECT * FROM samples WHERE ts >= ? ORDER BY ts DESC, id DESC LIMIT 1", (ts,)
+        )
+        return rows[0] if rows else None
+
+    def insert_label(
+        self,
+        *,
+        ts: float,
+        label: str,
+        source: str,
+        sample_id: int | None,
+        model_version: str | None,
+        predicted_label: str | None,
+    ) -> int:
+        return self._execute(
+            "INSERT INTO labels(ts, label, source, sample_id, model_version, predicted_label)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (ts, label, source, sample_id, model_version, predicted_label),
+        )
 
     # --- events -------------------------------------------------------------
     def log_event(self, ts: float, kind: str, detail: str | None = None) -> int:
