@@ -75,7 +75,7 @@ Not opened yet: Stage 1 is not merged to `main`. This body will be used when it 
 | 24 | Settings autostart toggle | `test_settings_autostart_toggle_uses_the_same_run_value`; `test_settings_ui.py::test_current_includes_autostart` |
 
 Checks run locally: `ruff format --check`, `ruff check`, `mypy`, `pytest`
-(317 passed, 1 skipped: the L1 live test) and `scripts/check_ownership.py`, all passing.
+(319 passed, 1 skipped: the L1 live test) and `scripts/check_ownership.py`, all passing.
 
 ## Not done or not verified
 
@@ -132,6 +132,8 @@ Each fix has a unit test that fails without it.
 | 6 | Minor | Tray refresh cost and thread safety | Refresh every 2 s. The latest-alert state is cached for 10 s and reset at once by a new alert or "mark wrong". `refresh()` runs under a lock. | `test_tray.py::test_refresh_interval_meets_spec_target`, `test_concurrent_refreshes_are_serialised`; `test_app.py::test_alert_state_is_cached_and_refreshed_on_new_alert` |
 | 7 | Minor | The scripts matched processes by command-line text | The shared `scripts/posture-checker-processes.ps1` matches this checkout's `.venv\Scripts\{pythonw,python,posture-checker}.exe`, plus their child processes (the base interpreter that the uv launcher starts). Install checks only the app; uninstall also stops the calibrate and settings windows. The helper ran read-only here (0 matches; the app-only regex was checked on sample command lines). | `test_install_scripts.py` |
 | 8 | Minor | A second instance opened the first one's log | `claim_single_instance` takes the mutex before `setup_logging()` | `test_app.py::test_second_instance_exits_before_touching_the_log` |
+| A | Re-review | After the finding-3 fix, the tray kept its old colour for up to 5 s after Pause or Resume | `pause_manual` / `resume_manual` update the supervisor's current reasons under its lock straight away, adding or removing only `manual` | `test_app.py::test_tray_status_follows_pause_and_resume_without_a_monitor_step` |
+| B | Re-review | The stale check depended on untested wiring in `main()` | `build_camera_usage(registry, db)` passes `filetime_now`; `main()` uses it | `test_app.py::test_app_camera_probe_has_the_stale_check_on` |
 
 **Note on finding 1.** The stale check is off unless a FILETIME clock is
 passed in; the real app always passes one. The acceptance tests build entries
