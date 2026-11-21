@@ -83,4 +83,8 @@ def load_config(path: Path | None = None) -> Config:
 def save_config(config: Config, path: Path | None = None) -> None:
     config.validate()
     path = path or paths.config_path()
-    path.write_text(json.dumps(asdict(config), indent=2), encoding="utf-8")
+    # Write a temporary file and swap it in, so the running app's config
+    # watcher never reads a half-written file.
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(asdict(config), indent=2), encoding="utf-8")
+    tmp.replace(path)
