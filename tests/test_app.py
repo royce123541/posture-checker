@@ -321,3 +321,18 @@ def test_alert_state_is_cached_and_refreshed_on_new_alert(db, calibration, clock
             break
     assert rig.notifier.alerts
     assert app.state().has_recent_alert is True  # refreshed at once, not after the cache
+
+
+def test_second_instance_exits_before_touching_the_log() -> None:
+    from acceptance.conftest import FakeMutexBackend, RecordingMessageNotifier
+    from posture_checker.app import ALREADY_RUNNING, claim_single_instance
+    from posture_checker.platform.single_instance import InstanceLock
+
+    backend = FakeMutexBackend()
+    started: list[str] = []
+    first, second = RecordingMessageNotifier(), RecordingMessageNotifier()
+    assert claim_single_instance(InstanceLock(backend), first, lambda: started.append("1"))
+    assert not claim_single_instance(InstanceLock(backend), second, lambda: started.append("2"))
+    assert started == ["1"]  # the second instance never set up logging
+    assert second.messages == [ALREADY_RUNNING]
+    assert first.messages == []

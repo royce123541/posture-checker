@@ -21,6 +21,7 @@ from posture_checker import actions, paths
 from posture_checker import tray as tray_mod
 from posture_checker.calibrate_flow import Launcher, gui_command, launch, run_calibration
 from posture_checker.monitor import CAMERA_UNAVAILABLE, PAUSED, Monitor, Sample
+from posture_checker.platform.single_instance import InstanceLock
 from posture_checker.policy.pausing import CALIBRATING, PauseSupervisor
 from posture_checker.settings_ui import ConfigWatcher
 from posture_checker.storage.db import Database
@@ -279,24 +280,37 @@ class App:
 QUIT_JOIN_S = 4.0
 
 
+def claim_single_instance(
+    lock: InstanceLock,
+    notifier: AppNotifier,
+    start_logging: Callable[[], object] = setup_logging,
+) -> bool:
+    """Take the single-instance lock, then start logging.
+
+    The lock comes first so a second instance exits without ever opening (or
+    rotating) the running instance's log file.
+    """
+    if not lock.acquire():
+        notifier.message(ALREADY_RUNNING)
+        return False
+    start_logging()
+    return True
+
+
 def main() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
     """Run the tray app until Quit."""
-    setup_logging()
+    from posture_checker.platform.single_instance import Win32MutexBackend
+    from posture_checker.platform.windows import ToastNotifier
+
+    notifier = ToastNotifier()
+    if not claim_single_instance(InstanceLock(Win32MutexBackend()), notifier):
+        return 0
     sys.excepthook = lambda *exc: log.critical("unhandled error", exc_info=exc)
     threading.excepthook = lambda args: log.critical(
         "unhandled error in thread %s",
         args.thread.name if args.thread else "?",
         exc_info=(args.exc_type, args.exc_value, args.exc_traceback),  # type: ignore[arg-type]
     )
-
-    from posture_checker.platform.single_instance import InstanceLock, Win32MutexBackend
-    from posture_checker.platform.windows import ToastNotifier
-
-    notifier = ToastNotifier()
-    if not InstanceLock(Win32MutexBackend()).acquire():
-        log.info("another instance is running; exiting")
-        notifier.message(ALREADY_RUNNING)
-        return 0
 
     from posture_checker.capture.camera import Camera
     from posture_checker.capture.pose import PoseEstimator
