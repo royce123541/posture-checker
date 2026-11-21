@@ -1,0 +1,62 @@
+<#
+.SYNOPSIS
+    Install Posture Checker for the current user (no admin rights needed).
+
+.DESCRIPTION
+    Run from the repository folder:  .\install.ps1
+    1. uv sync                          (dependencies into .venv)
+    2. fetch the pose model             (checksum-verified)
+    3. register the toast AUMID         (HKCU\Software\Classes\AppUserModelId\PostureChecker.App)
+       and the HKCU Run value "PostureChecker"
+       -> "<repo>\.venv\Scripts\pythonw.exe" -m posture_checker app
+    4. start the app and report whether it is still running after 5 seconds.
+    Running it again is safe: the Run value is overwritten (one value) and the
+    app's single-instance lock makes a second copy exit at once.
+
+.PARAMETER NoAutostart
+    Do not start the app at login (removes the Run value if present).
+#>
+param(
+    [switch]$NoAutostart
+)
+
+$ErrorActionPreference = "Stop"
+Set-Location -Path $PSScriptRoot
+
+Write-Host "1/4 Installing dependencies (uv sync)..."
+uv sync
+if ($LASTEXITCODE -ne 0) { throw "uv sync failed" }
+
+$python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+$pythonw = Join-Path $PSScriptRoot ".venv\Scripts\pythonw.exe"
+
+Write-Host "2/4 Fetching the pose model..."
+& $python -m posture_checker fetch-model
+if ($LASTEXITCODE -ne 0) { throw "fetch-model failed" }
+
+Write-Host "3/4 Registering toast identity (PostureChecker.App) and autostart (PostureChecker)..."
+$registerArgs = @("-m", "posture_checker.install", "register")
+if ($NoAutostart) { $registerArgs += "--no-autostart" }
+& $python @registerArgs
+if ($LASTEXITCODE -ne 0) { throw "register failed" }
+
+function Get-PostureCheckerProcess {
+    Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe' OR Name = 'python.exe'" |
+        Where-Object { $_.CommandLine -like "*-m posture_checker app*" }
+}
+
+Write-Host "4/4 Starting the app..."
+if (Get-PostureCheckerProcess) {
+    Write-Host "Posture Checker is already running; leaving it as it is."
+} else {
+    Start-Process -FilePath $pythonw -ArgumentList "-m", "posture_checker", "app" -WorkingDirectory $PSScriptRoot
+    # pythonw has no console, so an early crash would be invisible: check it survived.
+    Start-Sleep -Seconds 5
+    if (Get-PostureCheckerProcess) {
+        Write-Host "Posture Checker is running. Look for its icon in the system tray."
+    } else {
+        $log = Join-Path $env:LOCALAPPDATA "PostureChecker\posture-checker.log"
+        Write-Warning "Posture Checker exited within 5 seconds. See the log: $log"
+        exit 1
+    }
+}
