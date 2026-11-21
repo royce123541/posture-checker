@@ -108,7 +108,24 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if found else 2
 
 
+def cmd_app(_: argparse.Namespace) -> int:
+    from posture_checker.app import main as app_main
+
+    return app_main()
+
+
+def cmd_settings(_: argparse.Namespace) -> int:
+    from posture_checker.settings_ui import main as settings_main
+
+    return settings_main()
+
+
 def cmd_calibrate(args: argparse.Namespace) -> int:
+    if args.gui:
+        from posture_checker.calibrate_ui import main as calibrate_window
+
+        return calibrate_window(seconds=args.seconds, countdown=args.countdown)
+
     from posture_checker.calibration import CalibrationError, capture_calibration
     from posture_checker.capture.pose import PoseEstimator
     from posture_checker.storage.db import Database
@@ -253,6 +270,11 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="posture-checker", description=__doc__)
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="use a window instead of the terminal (how the tray starts calibrate)",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("fetch-model", help="download and verify the pose model").set_defaults(
@@ -274,6 +296,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--cooldown", type=float, help="seconds between alerts")
     run.add_argument("--no-toast", action="store_true", help="print alerts instead of toasts")
     run.set_defaults(func=cmd_run)
+
+    sub.add_parser("app", help="run in the background with a tray icon").set_defaults(func=cmd_app)
+    sub.add_parser("settings", help="open the settings window").set_defaults(func=cmd_settings)
 
     sub.add_parser("mark-wrong", help="mark the latest alert as wrong").set_defaults(
         func=cmd_mark_wrong

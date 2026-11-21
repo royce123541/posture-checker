@@ -21,6 +21,7 @@ MESSAGES = {
 
 _ARG_WRONG = "wrong"
 _ARG_PAUSE = "pause"
+_ARG_OPEN = "open"
 
 
 def register_aumid() -> None:
@@ -85,6 +86,22 @@ class ToastNotifier:
         )
         self._toaster.show_toast(toast)
 
+    def message(self, text: str, on_action: Callable[[], None] | None = None) -> None:
+        """A plain toast; with ``on_action``, clicking it (or "Open") calls it."""
+        from windows_toasts import Toast, ToastActivatedEventArgs, ToastButton
+
+        def activated(_event: ToastActivatedEventArgs) -> None:
+            if on_action is not None:
+                on_action()
+
+        toast = Toast(
+            text_fields=[APP_DISPLAY_NAME, text],
+            group="posture-message",
+            on_activated=activated if on_action is not None else None,
+            actions=(ToastButton("Open", arguments=_ARG_OPEN),) if on_action is not None else (),
+        )
+        self._toaster.show_toast(toast)
+
 
 class ConsoleNotifier:
     """Fallback that prints alerts; used with ``run --no-toast`` and off Windows."""
@@ -98,3 +115,6 @@ class ConsoleNotifier:
     ) -> None:
         title, advice = MESSAGES.get(label, ("Check your posture", "Sit upright."))
         print(f"\n*** ALERT #{alert_id}: {title}. {advice}")
+
+    def message(self, text: str, on_action: Callable[[], None] | None = None) -> None:
+        print(f"\n*** {text}")
