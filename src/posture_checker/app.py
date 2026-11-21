@@ -253,7 +253,7 @@ def main() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
     from posture_checker.capture.pose import PoseEstimator
     from posture_checker.config import load_config
     from posture_checker.inference.rules import RulesModel
-    from posture_checker.platform.camera_usage import RegistryCameraUsage
+    from posture_checker.platform.camera_usage import RegistryCameraUsage, filetime_now
     from posture_checker.platform.power import PsutilBattery, WindowsLockState
     from posture_checker.platform.registry import WinRegistry
 
@@ -265,7 +265,9 @@ def main() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
         db.log_event(time.time(), "camera_probe", text)
 
     supervisor = PauseSupervisor(
-        camera_usage=RegistryCameraUsage(WinRegistry(), log_event=log_probe_event),
+        camera_usage=RegistryCameraUsage(
+            WinRegistry(), log_event=log_probe_event, now_filetime=filetime_now
+        ),
         lock_state=WindowsLockState(),
         battery=PsutilBattery(),
         battery_pause_percent=config.battery_pause_percent,

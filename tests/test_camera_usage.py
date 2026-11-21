@@ -56,3 +56,34 @@ def test_unreadable_key_logs_once() -> None:
     for _ in range(3):
         assert probe.apps_in_use() == []
     assert len(events) == 1
+
+
+HOUR_TICKS = 3600 * 10_000_000
+
+
+def test_entry_open_longer_than_12_hours_is_stale_and_logged_once() -> None:
+    from posture_checker.platform.camera_usage import STALE_AFTER_S
+
+    now = 1_000 * HOUR_TICKS
+    reg = FakeRegistry()
+    reg.add_app("NonPackaged\\C:#A#Crashed.exe", now - 13 * HOUR_TICKS, 0)
+    reg.add_app("NonPackaged\\C:#A#Zoom.exe", now - 1 * HOUR_TICKS, 0)
+    events: list[str] = []
+    probe = RegistryCameraUsage(
+        reg, own_executables=(), log_event=events.append, now_filetime=lambda: now
+    )
+    assert STALE_AFTER_S == 12 * 3600
+    assert probe.apps_in_use() == ["Zoom.exe"]
+    assert probe.apps_in_use() == ["Zoom.exe"]
+    assert len(events) == 1 and "Crashed.exe" in events[0]
+
+
+def test_filetime_now_matches_wall_clock() -> None:
+    import time
+
+    from posture_checker.platform.camera_usage import filetime_now
+
+    # 2026 is about 425 years after 1601.
+    years = filetime_now() / 10_000_000 / (365.25 * 24 * 3600)
+    assert 424 < years < 427
+    assert abs(filetime_now() / 10_000_000 - 11_644_473_600 - time.time()) < 5

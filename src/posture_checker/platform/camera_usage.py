@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import sys
+import time
 from collections.abc import Callable, Iterable
 from pathlib import PureWindowsPath
 
@@ -54,6 +55,22 @@ def _own_paths(executables: Iterable[str]) -> set[str]:
     return own
 
 
+#: An entry that has said "in use" for longer than this is treated as stale:
+#: an app that crashed, or a machine that hibernated mid-call, never writes
+#: LastUsedTimeStop, which would otherwise keep us paused forever. 12 h is far
+#: longer than any real call (review finding, Stage 2).
+STALE_AFTER_S = 12 * 60 * 60
+#: Registry timestamps are FILETIMEs: 100 ns ticks since 1601-01-01 UTC.
+FILETIME_TICKS_PER_S = 10_000_000
+#: Seconds from 1601-01-01 to the Unix epoch 1970-01-01.
+FILETIME_EPOCH_OFFSET_S = 11_644_473_600
+
+
+def filetime_now() -> int:
+    """The current time as a Windows FILETIME."""
+    return int((time.time() + FILETIME_EPOCH_OFFSET_S) * FILETIME_TICKS_PER_S)
+
+
 def _in_use(values: dict[str, object]) -> bool:
     start = values.get("LastUsedTimeStart", 0)
     stop = values.get("LastUsedTimeStop", 0)
@@ -68,8 +85,13 @@ class RegistryCameraUsage:
         registry: Registry,
         own_executables: Iterable[str] | None = None,
         log_event: Callable[[str], None] | None = None,
+        now_filetime: Callable[[], int] | None = None,
     ) -> None:
+        """``now_filetime`` turns on the stale-entry check (the app passes
+        ``filetime_now``); without it every open entry counts as in use."""
         self.registry = registry
+        self._now_filetime = now_filetime
+        self._reported_stale: set[str] = set()
         executables = (
             _default_own_executables() if own_executables is None else tuple(own_executables)
         )
@@ -90,7 +112,7 @@ class RegistryCameraUsage:
         for sub in top:
             if sub == NON_PACKAGED:
                 apps.update(self._non_packaged())
-            elif self._entry_in_use(WEBCAM_KEY + "\\" + sub):
+            elif self._entry_in_use(WEBCAM_KEY + "\\" + sub, sub):
                 apps.add(_PUBLISHER_SUFFIX.sub("", sub))
         return sorted(apps)
 
@@ -105,12 +127,28 @@ class RegistryCameraUsage:
             path = entry.replace("#", "\\")
             if _norm(path) in self._own:
                 continue
-            if self._entry_in_use(base + "\\" + entry):
+            if self._entry_in_use(base + "\\" + entry, entry):
                 apps.append(PureWindowsPath(path).name)
         return apps
 
-    def _entry_in_use(self, key: str) -> bool:
+    def _entry_in_use(self, key: str, name: str) -> bool:
         try:
-            return _in_use(self.registry.values(key))
+            values = self.registry.values(key)
         except OSError:
             return False
+        if not _in_use(values):
+            self._reported_stale.discard(name)
+            return False
+        if self._now_filetime is not None:
+            start = values["LastUsedTimeStart"]
+            assert isinstance(start, int)
+            age_s = (self._now_filetime() - start) / FILETIME_TICKS_PER_S
+            if age_s > STALE_AFTER_S:
+                if name not in self._reported_stale:
+                    self._reported_stale.add(name)
+                    self._log_event(
+                        f"ignoring stale camera-use entry {name}: "
+                        f"in use for {age_s / 3600:.0f} h with no stop time"
+                    )
+                return False
+        return True
