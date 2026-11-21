@@ -123,3 +123,15 @@ uv run mypy            # type-check
 
 CI runs the same checks and builds the wheel on every push
 (`.github/workflows/ci.yml`).
+
+### File ownership
+
+Each stage starts from a written spec (`docs/specs/`) and acceptance tests
+written from it before any code (`tests/acceptance/`). So that code can't be
+made to pass by changing its own targets, CI runs
+`scripts/check_ownership.py`, which requires:
+
+| Path | Commit subject must start with | May change other files in the same commit |
+|---|---|---|
+| `docs/specs/` | `Spec:` | no |
+| `tests/acceptance/` | `Acceptance tests:` | no |
