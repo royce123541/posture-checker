@@ -7,9 +7,10 @@ import threading
 from acceptance.conftest import FakeLauncher, FakeRegistry, Rig
 from posture_checker import install, paths, tray
 from posture_checker import monitor as mon
-from posture_checker.app import App, setup_logging
+from posture_checker.app import ALERT_STATE_CACHE_S, App, setup_logging
 from posture_checker.calibrate_flow import gui_command
 from posture_checker.inference import SLOUCH
+from posture_checker.synthetic import make_landmarks
 
 
 def make_app(db, calibration, clock, launcher=None, **config):
@@ -44,10 +45,10 @@ def test_tray_pause_and_resume_actions(db, calibration, clock) -> None:
     rig, app = make_app(db, calibration, clock)
     app.tick()
     app.tray_actions()[tray.PAUSE_15]()
-    assert rig.camera.is_open is False  # released at once, not at the next sample
     assert app.state().manual_paused is True
     clock.advance(1)
     assert app.tick() == mon.PAUSED_CHECK_INTERVAL_S
+    assert rig.camera.is_open is False  # released by the worker's next check
     assert app.status() == ("grey", "Paused: by you")
     app.tray_actions()[tray.RESUME]()
     clock.advance(1)
@@ -75,6 +76,7 @@ def test_mark_wrong_state_follows_alerts(db, calibration, clock) -> None:
         model_version="v",
         calibration_id=None,
     )
+    clock.advance(ALERT_STATE_CACHE_S)  # inserted behind the app's back: wait for the cache
     assert (app.state().has_recent_alert, app.state().latest_alert_marked) == (True, False)
     app.tray_actions()[tray.MARK_WRONG]()
     assert app.state().latest_alert_marked is True
@@ -200,3 +202,122 @@ def test_remove_data_deletes_the_whole_folder() -> None:
     folder = paths.app_dir()
     install.unregister(FakeRegistry(), remove_data=True)
     assert not folder.exists()
+
+
+# --- review findings ------------------------------------------------------------
+
+
+def test_second_calibration_request_is_refused_synchronously(db, calibration, clock) -> None:
+    """Two quick requests start one window, even before the worker has run."""
+    release = threading.Event()
+    commands: list[list[str]] = []
+
+    class SlowProcess:
+        def wait(self) -> int:
+            release.wait(5)
+            return 0
+
+    def launcher(command):
+        commands.append(command)
+        return SlowProcess()
+
+    _rig, app = make_app(db, calibration, clock, launcher=launcher)
+    gate = threading.Event()
+    real_run = app.supervisor.add_reason
+
+    def slow_add_reason(name):  # hold the worker before it sets "calibrating"
+        gate.wait(5)
+        real_run(name)
+
+    app.supervisor.add_reason = slow_add_reason
+    assert app.start_calibration() is True
+    assert app.start_calibration() is False  # the reason is not set yet, still refused
+    assert "calibrating" in app.state().paused_reasons
+    gate.set()
+    release.set()
+    for _ in range(100):
+        if app.start_calibration():
+            break
+        threading.Event().wait(0.05)
+    else:
+        raise AssertionError("the slot was never released")
+    release.set()
+    for _ in range(100):
+        if len(commands) == 2:
+            break
+        threading.Event().wait(0.05)
+    assert len(commands) == 2  # the first run, then the retry after it finished
+
+
+def test_tray_pause_does_not_wait_for_the_monitor(db, calibration, clock) -> None:
+    rig, app = make_app(db, calibration, clock)
+    held = threading.Event()
+    done = threading.Event()
+
+    def hold_monitor_lock():
+        with rig.monitor._lock:  # e.g. a slow camera open on the worker
+            held.set()
+            done.wait(5)
+
+    thread = threading.Thread(target=hold_monitor_lock, daemon=True)
+    thread.start()
+    assert held.wait(5)
+    finished = threading.Event()
+
+    def press_pause_and_resume():
+        app.pause(None)
+        app.resume()
+        finished.set()
+
+    threading.Thread(target=press_pause_and_resume, daemon=True).start()
+    try:
+        assert finished.wait(1), "tray action blocked on the monitor lock"
+    finally:
+        done.set()
+        thread.join(5)
+
+
+def test_error_toast_shown_again_after_a_recovery(db, calibration, clock) -> None:
+    rig, app = make_app(db, calibration, clock)
+    state = {"fail": True}
+
+    def provider():
+        if state["fail"]:
+            raise RuntimeError("broken")
+        return make_landmarks()
+
+    rig.monitor.pose.provider = provider
+    app.tick()  # error 1: toast
+    clock.advance(30)
+    app.tick()  # still broken: no second toast
+    assert len(rig.notifier.messages) == 1
+    state["fail"] = False
+    clock.advance(30)
+    app.tick()  # recovered
+    state["fail"] = True
+    clock.advance(2)
+    app.tick()  # a new failure after recovery
+    assert len(rig.notifier.messages) == 2
+
+
+def test_alert_state_is_cached_and_refreshed_on_new_alert(db, calibration, clock) -> None:
+    rig, app = make_app(db, calibration, clock, alert_window_s=10, cooldown_s=300)
+    calls = {"n": 0}
+    real = db.last_alert
+
+    def counting():
+        calls["n"] += 1
+        return real()
+
+    db.last_alert = counting
+    for _ in range(5):
+        app.state()
+    assert calls["n"] == 1
+    rig.landmarks = {"head_forward": 0.3}
+    for _ in range(30):
+        app.tick()
+        clock.advance(1)
+        if rig.notifier.alerts:
+            break
+    assert rig.notifier.alerts
+    assert app.state().has_recent_alert is True  # refreshed at once, not after the cache

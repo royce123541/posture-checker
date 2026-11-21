@@ -41,6 +41,9 @@ PAUSE_POLL_S = 5.0
 #: Pause lengths offered in the tray (spec behaviour 8).
 PAUSE_15_MIN_S = 15 * 60
 PAUSE_1_HOUR_S = 60 * 60
+#: The tray re-reads the latest-alert state at most this often (it refreshes
+#: every 2 s); a new alert or a "mark wrong" refreshes it at once.
+ALERT_STATE_CACHE_S = 10.0
 
 CALIBRATE_PROMPT = "Calibrate to start: sit in your good posture for a few seconds."
 ERROR_TOAST = "Posture Checker hit an error and will retry in 30 seconds. Details are in the log."
@@ -100,12 +103,34 @@ class App:
         self._retry_at = 0.0
         self._error_shown = False
         self._last_sample: Sample | None = None
+        #: Held while a calibration window is running (one at a time).
+        self._calibration_slot = threading.Lock()
+        #: Cached (has recent alert, marked) and when it was read.
+        self._alert_state: tuple[bool, bool] | None = None
+        self._alert_state_at = 0.0
+        self._alert_state_lock = threading.Lock()
 
     # --- state for the tray -------------------------------------------------
+    def _alert_feedback_state(self) -> tuple[bool, bool]:
+        """Alert state for the menu, re-read at most every ALERT_STATE_CACHE_S."""
+        with self._alert_state_lock:
+            now = self.clock()
+            if self._alert_state is None or now - self._alert_state_at >= ALERT_STATE_CACHE_S:
+                self._alert_state = actions.alert_feedback_state(self.db, self.clock)
+                self._alert_state_at = now
+            return self._alert_state
+
+    def _forget_alert_state(self) -> None:
+        with self._alert_state_lock:
+            self._alert_state = None
+
     def state(self) -> TrayState:
-        has_recent, marked = actions.alert_feedback_state(self.db, self.clock)
+        has_recent, marked = self._alert_feedback_state()
+        reasons = tuple(self.supervisor.reasons)
+        if self._calibration_slot.locked() and CALIBRATING not in reasons:
+            reasons += (CALIBRATING,)  # claimed, not yet seen by a supervisor check
         return TrayState(
-            paused_reasons=tuple(self.supervisor.reasons),
+            paused_reasons=reasons,
             manual_paused=self.supervisor.manual_active,
             calibrated=self.monitor.calibration is not None,
             camera_available=self.monitor.last_state != CAMERA_UNAVAILABLE,
@@ -119,7 +144,7 @@ class App:
     # --- lifecycle ----------------------------------------------------------
     def startup(self) -> None:
         if self.monitor.calibration is None:
-            self.notifier.message(CALIBRATE_PROMPT, on_action=self.start_calibration)
+            self.notifier.message(CALIBRATE_PROMPT, on_action=self.request_calibration)
 
     def tick(self) -> float:
         """Take one sample if due; return the seconds to wait before the next."""
@@ -142,6 +167,10 @@ class App:
             self._retry_at = now + RESTART_DELAY_S
             return RESTART_DELAY_S
         self._last_sample = sample
+        # A new failure after a recovery deserves its own toast.
+        self._error_shown = False
+        if sample.alert_id is not None:
+            self._forget_alert_state()  # "Mark latest alert wrong" becomes available
         return self.monitor.next_interval(sample)
 
     def _pause_changed(self) -> bool:
@@ -173,31 +202,51 @@ class App:
             self.db.log_event(self.clock(), "stop")
 
     # --- tray actions -------------------------------------------------------
+    # These run on the tray thread. They only update the supervisor and never
+    # take the monitor's lock, so a slow camera open cannot freeze the tray;
+    # the worker's pause poll (every PAUSE_POLL_S) releases the camera.
     def pause(self, seconds: float | None) -> None:
         self.supervisor.pause_manual(seconds)
-        self.monitor.check_pause()
 
     def resume(self) -> None:
         self.supervisor.resume_manual()
 
     def mark_wrong(self) -> None:
         actions.mark_latest_alert_wrong(self.db, self.clock)
+        self._forget_alert_state()
 
     def label(self, name: str) -> None:
         actions.record_label(self.db, self.clock, name, confirm=self.notifier.message)
 
-    def start_calibration(self) -> None:
-        """Calibrate in a separate process without blocking the caller."""
-        if CALIBRATING in self.supervisor.reasons:
-            return
+    def request_calibration(self) -> None:
+        """Tray and toast callback for ``start_calibration``."""
+        self.start_calibration()
+
+    def start_calibration(self) -> bool:
+        """Calibrate in a separate process without blocking the caller.
+
+        The calibration slot is claimed here, synchronously, so a second request
+        (a double click, or the toast plus the tray) is refused instead of
+        starting a second window whose exit would resume monitoring early.
+        """
+        if not self._calibration_slot.acquire(blocking=False):
+            log.info("calibration already running; request ignored")
+            return False
 
         def work() -> None:
             try:
                 run_calibration(self.monitor, self.supervisor, self.launcher)
             except Exception:
                 log.exception("calibration failed to start")
+            finally:
+                self._calibration_slot.release()
 
-        threading.Thread(target=work, name="calibrate", daemon=True).start()
+        try:
+            threading.Thread(target=work, name="calibrate", daemon=True).start()
+        except Exception:
+            self._calibration_slot.release()
+            raise
+        return True
 
     def open_settings(self) -> None:
         self.launcher(gui_command("settings"))
@@ -219,7 +268,7 @@ class App:
             tray_mod.LABEL_SLOUCH: lambda: self.label("slouch"),
             tray_mod.LABEL_FORWARD_HEAD: lambda: self.label("forward_head"),
             tray_mod.LABEL_TOO_CLOSE: lambda: self.label("too_close"),
-            tray_mod.CALIBRATE: self.start_calibration,
+            tray_mod.CALIBRATE: self.request_calibration,
             tray_mod.SETTINGS: self.open_settings,
             tray_mod.OPEN_DATA: self.open_data_folder,
             tray_mod.QUIT: self.quit,
