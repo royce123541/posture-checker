@@ -1,7 +1,8 @@
 """The monitoring loop: frame -> pose -> features -> model -> alert policy.
 
-Every collaborator (camera, pose model, posture model, notifier, clock) is
-injected, so the whole pipeline runs in tests with fakes and no webcam.
+Every collaborator (camera, pose model, posture model, notifier, clock, pause
+supervisor) is injected, so the whole pipeline runs in tests with fakes and no
+webcam.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from posture_checker.capture.pose import PoseBackend
 from posture_checker.config import Config
 from posture_checker.inference import PostureModel, Prediction
 from posture_checker.policy.alerts import Alert, AlertPolicy
+from posture_checker.policy.pausing import MANUAL, PauseSupervisor
 from posture_checker.storage.db import Database
 
 # Sample states
@@ -32,6 +34,15 @@ CAMERA_UNAVAILABLE = "camera_unavailable"
 
 #: States that are written to the samples table.
 STORED_STATES = (PRESENT, LOW_CONFIDENCE, AWAY)
+
+#: After this many seconds of consecutive "away" samples, switch to
+#: presence-check mode (spec Stage 2, behaviour 9).
+PRESENCE_CHECK_AFTER_S = 5 * 60
+#: Sampling interval in presence-check mode (spec Stage 2, behaviour 9).
+PRESENCE_CHECK_INTERVAL_S = 30.0
+#: While paused, re-check the pause reasons at least this often (spec Stage 2,
+#: behaviour 3).
+PAUSED_CHECK_INTERVAL_S = 5.0
 
 
 class Notifier(Protocol):
@@ -73,6 +84,7 @@ class Monitor:
         model: PostureModel,
         notifier: Notifier,
         clock: Callable[[], float] = time.time,
+        supervisor: PauseSupervisor | None = None,
     ) -> None:
         self.config = config
         self.db = db
@@ -81,6 +93,7 @@ class Monitor:
         self.model = model
         self.notifier = notifier
         self.clock = clock
+        self.supervisor = supervisor
         self.policy = AlertPolicy(
             window_s=config.alert_window_s,
             bad_fraction=config.bad_fraction,
@@ -89,14 +102,29 @@ class Monitor:
         self.calibration: Calibration | None = db.latest_calibration()
         self._paused_until = 0.0
         self._camera_open = False
+        #: Pause reasons active at the last check, so each change is logged once.
+        self._active_reasons: set[str] = set()
+        #: Start of the current run of consecutive "away" samples.
+        self._away_since: float | None = None
+        #: State of the latest sample (the tray shows "camera unavailable").
+        self.last_state: str | None = None
+        #: Serialises sampling with calls from other threads (tray actions).
+        self._lock = threading.RLock()
 
     # --- pause / resume -----------------------------------------------------
     def pause(self, seconds: float, reason: str = "manual") -> None:
+        if self.supervisor is not None:
+            # The supervisor owns pausing; check_pause() logs the transition.
+            self.supervisor.pause_manual(seconds)
+            return
         now = self.clock()
         self._paused_until = now + seconds
         self.db.log_event(now, "pause", f"{reason}:{int(seconds)}s")
 
     def resume(self) -> None:
+        if self.supervisor is not None:
+            self.supervisor.resume_manual()
+            return
         if self._paused_until > 0:
             self._paused_until = 0.0
             self.db.log_event(self.clock(), "resume", "manual")
@@ -105,26 +133,89 @@ class Monitor:
     def paused(self) -> bool:
         return self.clock() < self._paused_until
 
+    def check_pause(self) -> list[str]:
+        """Return the active pause reasons, logging one event per change.
+
+        With a supervisor, every reason that appears writes one ``pause`` row
+        and every reason that clears writes one ``resume`` row (behaviour 10).
+        The camera is released as soon as any reason is active.
+        """
+        with self._lock:
+            if self.supervisor is None:
+                return [MANUAL] if self.paused else []
+            reasons = self.supervisor.check().reasons
+            now = self.clock()
+            for reason in reasons:
+                if reason not in self._active_reasons:
+                    self.db.log_event(now, "pause", reason)
+            for reason in sorted(self._active_reasons - set(reasons)):
+                self.db.log_event(now, "resume", reason)
+            self._active_reasons = set(reasons)
+            if reasons:
+                self.release_camera()
+                self.policy.reset()
+            return reasons
+
     def reload_calibration(self) -> None:
-        self.calibration = self.db.latest_calibration()
-        self.policy.reset()
+        with self._lock:
+            self.calibration = self.db.latest_calibration()
+            self.policy.reset()
+
+    def apply_config(self, config: Config) -> None:
+        """Use new settings without a restart (behaviour 16)."""
+        with self._lock:
+            self.config = config
+            self.policy.window_s = config.alert_window_s
+            self.policy.bad_fraction = config.bad_fraction
+            self.policy.cooldown_s = config.cooldown_s
+            if hasattr(self.model, "sensitivity"):
+                self.model.sensitivity = config.sensitivity
+            if self.supervisor is not None:
+                self.supervisor.battery_pause_percent = config.battery_pause_percent
+
+    @property
+    def presence_check(self) -> bool:
+        """True after 5 minutes of nobody at the desk (behaviour 9)."""
+        return (
+            self._away_since is not None
+            and self.clock() - self._away_since >= PRESENCE_CHECK_AFTER_S
+        )
 
     # --- one sample ---------------------------------------------------------
-    def _release_camera(self) -> None:
-        if self._camera_open:
-            self.source.close()
-            self._camera_open = False
+    def release_camera(self) -> None:
+        """Close the camera if it is open. Safe to call from any thread."""
+        with self._lock:
+            if self._camera_open:
+                self.source.close()
+                self._camera_open = False
 
     def step(self) -> Sample:
         """Take and process one sample."""
+        with self._lock:
+            sample = self._step()
+            self.last_state = sample.state
+            # Burst mode, and presence-check mode whatever the camera mode, let
+            # go of the camera between samples.
+            if self.config.camera_mode == "burst" or self.presence_check:
+                self.release_camera()
+            return sample
+
+    def _track_away(self, state: str, now: float) -> None:
+        if state == AWAY:
+            if self._away_since is None:
+                self._away_since = now
+        else:
+            self._away_since = None
+
+    def _step(self) -> Sample:
         now = self.clock()
 
-        if self.paused:
-            self._release_camera()
+        if self.check_pause():
+            self.release_camera()
             self.policy.reset()
             return Sample(ts=now, state=PAUSED)
         if self.calibration is None:
-            self._release_camera()
+            self.release_camera()
             return Sample(ts=now, state=UNCALIBRATED)
 
         if not self._camera_open:
@@ -132,7 +223,7 @@ class Monitor:
         frame = self.source.read() if self._camera_open else None
         if frame is None:
             # Missing, busy (another app has it) or failed: let go and retry later.
-            self._release_camera()
+            self.release_camera()
             self.policy.reset()
             return Sample(ts=now, state=CAMERA_UNAVAILABLE)
 
@@ -146,6 +237,7 @@ class Monitor:
             # "no_person" alone means the desk is empty; with a lighting flag it
             # means the camera could not have seen anyone.
             state = AWAY if quality.reasons == ("no_person",) else LOW_CONFIDENCE
+            self._track_away(state, now)
             self.policy.reset()
             self.db.insert_sample(
                 ts=now,
@@ -173,6 +265,7 @@ class Monitor:
         prediction = self.model.predict(relative)
         confident = quality.confidence >= self.config.min_confidence
         state = PRESENT if confident else LOW_CONFIDENCE
+        self._track_away(state, now)
 
         alert = self.policy.update(now, prediction.label, confident)
         alert_id = None
@@ -226,7 +319,11 @@ class Monitor:
     # --- loop ---------------------------------------------------------------
     def next_interval(self, sample: Sample) -> float:
         """How long to wait before the next sample."""
-        if sample.state in (AWAY, CAMERA_UNAVAILABLE, PAUSED, UNCALIBRATED):
+        if sample.state == PAUSED:
+            return min(self.config.away_interval_s, PAUSED_CHECK_INTERVAL_S)
+        if sample.state == AWAY and self.presence_check:
+            return PRESENCE_CHECK_INTERVAL_S
+        if sample.state in (AWAY, CAMERA_UNAVAILABLE, UNCALIBRATED):
             return self.config.away_interval_s
         if self.policy.suspect:
             return self.config.suspect_interval_s
@@ -246,5 +343,5 @@ class Monitor:
                     on_sample(sample)
                 stop.wait(self.next_interval(sample))
         finally:
-            self._release_camera()
+            self.release_camera()
             self.db.log_event(self.clock(), "stop")

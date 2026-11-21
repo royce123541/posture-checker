@@ -8,6 +8,8 @@ from pathlib import Path
 
 from posture_checker import paths
 
+CAMERA_MODES = ("hold", "burst")
+
 
 @dataclass
 class Config:
@@ -37,6 +39,11 @@ class Config:
     camera_index: int = 0
     frame_width: int = 640
     frame_height: int = 480
+    #: "hold" keeps the camera open between samples (Stage 1 behaviour);
+    #: "burst" opens it, reads one frame and closes it for every sample, so other
+    #: apps can always take it. "hold" stays the default until live check L1
+    #: (scripts/camera_share_probe.py) shows whether holding blocks other apps.
+    camera_mode: str = "hold"
 
     # --- Power --------------------------------------------------------------
     #: Pause monitoring below this battery percentage when unplugged.
@@ -53,6 +60,12 @@ class Config:
             raise ValueError("sensitivity must be between 0.25 and 4.0")
         if not 0.0 <= self.min_confidence <= 1.0:
             raise ValueError("min_confidence must be between 0 and 1")
+        if self.cooldown_s < 0:
+            raise ValueError("cooldown_s must not be negative")
+        if not 0 <= self.battery_pause_percent <= 100:
+            raise ValueError("battery_pause_percent must be between 0 and 100")
+        if self.camera_mode not in CAMERA_MODES:
+            raise ValueError(f"camera_mode must be one of {', '.join(CAMERA_MODES)}")
 
 
 def load_config(path: Path | None = None) -> Config:
