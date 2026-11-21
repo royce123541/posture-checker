@@ -8,11 +8,15 @@ so tests drive the supervisor with fakes and a fake clock.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, TypeVar
+
+log = logging.getLogger(__name__)
+T = TypeVar("T")
 
 MANUAL = "manual"
 CALIBRATING = "calibrating"
@@ -87,6 +91,8 @@ class PauseSupervisor:
         self._camera_seen: dict[str, float] = {}
         self._battery_paused = False
         self._last = PauseDecision()
+        #: Probes whose failure has been logged (cleared once they work again).
+        self._failed_probes: set[str] = set()
 
     # --- manual and other explicit reasons ----------------------------------
     def pause_manual(self, seconds: float | None) -> None:
@@ -122,8 +128,26 @@ class PauseSupervisor:
             return list(self._last.reasons)
 
     # --- the decision -------------------------------------------------------
+    def _probe(self, name: str, read: Callable[[], T], fallback: T) -> T:
+        """Call one probe; a failure is logged once and counts as no reason.
+
+        A broken probe must not raise out of check(): that would crash the
+        monitor step and loop through the 30 s error restart forever.
+        """
+        try:
+            value = read()
+        except Exception:
+            if name not in self._failed_probes:
+                self._failed_probes.add(name)
+                log.exception("%s probe failed; ignoring it until it works again", name)
+            return fallback
+        self._failed_probes.discard(name)
+        return value
+
     def _camera_reasons(self, now: float) -> list[str]:
-        for app in self.camera_usage.apps_in_use():
+        no_apps: list[str] = []
+        apps = self._probe("camera-in-use", self.camera_usage.apps_in_use, no_apps)
+        for app in apps:
             self._camera_seen[app] = now
         for app, seen in list(self._camera_seen.items()):
             if now - seen >= CAMERA_GRACE_S:
@@ -131,7 +155,7 @@ class PauseSupervisor:
         return [CAMERA_IN_USE_PREFIX + app for app in sorted(self._camera_seen)]
 
     def _battery_low(self) -> bool:
-        status = self.battery.status()
+        status = self._probe("battery", self.battery.status, BatteryStatus(None, True))
         if status.percent is None:
             # No battery (desktop): never pause for power.
             self._battery_paused = False
@@ -157,7 +181,7 @@ class PauseSupervisor:
                 self._manual_until = None  # a timed pause ran out
             reasons.extend(sorted(self._extra))
             reasons.extend(self._camera_reasons(now))
-            if self.lock_state.is_locked():
+            if self._probe("lock", self.lock_state.is_locked, False):
                 reasons.append(LOCKED)
             if self._battery_low():
                 reasons.append(LOW_BATTERY)

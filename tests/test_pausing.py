@@ -88,3 +88,29 @@ def test_threshold_change_takes_effect(clock) -> None:
     assert not sup.check().paused
     sup.battery_pause_percent = 50
     assert sup.check().reasons == ["low_battery"]
+
+
+def test_failing_probe_counts_as_no_reason_and_logs_once(clock, caplog) -> None:
+    import logging
+
+    sup, usage, lock, _b = make(clock)
+
+    def broken():
+        raise OSError("probe broke")
+
+    usage.apps_in_use = broken
+    lock.locked = True
+    with caplog.at_level(logging.ERROR):
+        assert sup.check().reasons == ["locked"]  # other probes still count
+        assert sup.check().reasons == ["locked"]
+    assert len([r for r in caplog.records if "camera-in-use probe failed" in r.getMessage()]) == 1
+
+
+def test_failing_battery_probe_never_pauses(clock) -> None:
+    sup, _u, _lk, battery = make(clock)
+
+    def broken():
+        raise RuntimeError("driver")
+
+    battery.status = broken
+    assert not sup.check().paused
