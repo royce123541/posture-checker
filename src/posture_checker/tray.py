@@ -28,9 +28,9 @@ GREEN, GREY, AMBER = "green", "grey", "amber"
 COLOURS = {GREEN: (46, 160, 67), GREY: (140, 140, 140), AMBER: (230, 160, 20)}
 #: Windows truncates notification-area tooltips to 127 characters.
 TOOLTIP_MAX = 127
-#: How often the icon re-reads the app state; spec behaviour 12 asks for an
-#: update within 2 s of a change.
-REFRESH_S = 1.0
+#: How often the icon re-reads the app state: the spec's target (behaviour 12,
+#: update within 2 s of a change), and no more often, to keep polling cheap.
+REFRESH_S = 2.0
 
 # Menu action ids, mapped to callbacks by TrayIcon.
 PAUSE_15 = "pause_15"
@@ -151,6 +151,7 @@ class TrayIcon:
         self._stopped = threading.Event()
         self._shown: tuple[str, str] | None = None
         self._shown_menu: list[MenuItem] | None = None
+        self._refresh_lock = threading.Lock()
 
     def _pystray_items(self, items: list[MenuItem]) -> list[Any]:
         import pystray
@@ -180,26 +181,35 @@ class TrayIcon:
         return run
 
     def _menu(self) -> Any:
+
+        return self._pystray_menu(menu_model(self.get_state()))
+
+    def _pystray_menu(self, model: list[MenuItem]) -> Any:
         import pystray
 
-        return pystray.Menu(*self._pystray_items(menu_model(self.get_state())))
+        return pystray.Menu(*self._pystray_items(model))
 
     def refresh(self) -> None:
-        """Redraw the icon, tooltip and menu if the state changed."""
-        if self._icon is None:
-            return
-        state = self.get_state()
-        status = tray_status(state)
-        if status != self._shown:
-            self._shown = status
-            self._icon.icon = icon_image(status[0])
-            self._icon.title = status[1]
-        model = menu_model(state)
-        if model != self._shown_menu:
-            # Rebuild only on change, so an open menu is not replaced every second.
-            self._shown_menu = model
-            self._icon.menu = self._menu()
-            self._icon.update_menu()
+        """Redraw the icon, tooltip and menu if the state changed.
+
+        Called by the refresh loop and after every menu action (pystray's
+        thread), so it runs under a lock.
+        """
+        with self._refresh_lock:
+            if self._icon is None:
+                return
+            state = self.get_state()
+            status = tray_status(state)
+            if status != self._shown:
+                self._shown = status
+                self._icon.icon = icon_image(status[0])
+                self._icon.title = status[1]
+            model = menu_model(state)
+            if model != self._shown_menu:
+                # Rebuild only on change, so an open menu is not replaced every refresh.
+                self._shown_menu = model
+                self._icon.menu = self._pystray_menu(model)
+                self._icon.update_menu()
 
     def _refresh_loop(self) -> None:
         while not self._stopped.wait(REFRESH_S):

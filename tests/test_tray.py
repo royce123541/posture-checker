@@ -55,3 +55,46 @@ def test_icon_image_is_drawn_in_memory() -> None:
     image = tray.icon_image("amber")
     assert image.size == (64, 64)
     assert image.getpixel((32, 32))[:3] == tray.COLOURS["amber"]
+
+
+def test_refresh_interval_meets_spec_target() -> None:
+    assert tray.REFRESH_S == 2.0
+
+
+class FakeIcon:
+    """Stands in for pystray.Icon; counts updates."""
+
+    def __init__(self) -> None:
+        self.icon = None
+        self.title = ""
+        self.menu = None
+        self.menu_updates = 0
+
+    def update_menu(self) -> None:
+        self.menu_updates += 1
+
+
+def test_concurrent_refreshes_are_serialised() -> None:
+    import threading
+
+    inside = {"now": 0, "max": 0}
+    gate = threading.Lock()
+
+    def get_state() -> TrayState:
+        with gate:
+            inside["now"] += 1
+            inside["max"] = max(inside["max"], inside["now"])
+        threading.Event().wait(0.02)
+        with gate:
+            inside["now"] -= 1
+        return TrayState()
+
+    icon = tray.TrayIcon(get_state, {})
+    icon._icon = FakeIcon()
+    threads = [threading.Thread(target=icon.refresh) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+    assert inside["max"] == 1
+    assert icon._icon.menu_updates == 1  # built once; unchanged menus are not rebuilt
