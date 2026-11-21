@@ -21,7 +21,7 @@ Not opened yet: Stage 1 is not merged to `main`. This body will be used when it 
   via psutil plus `GetSystemPowerStatus` for Battery Saver; named-mutex single
   instance; HKCU Run-key autostart; a `Registry` protocol with a `winreg` adapter.
 - **Tray** (`tray.py`): pure `menu_model` / `tray_status` plus a thin pystray
-  icon that refreshes every 1 s and rebuilds the menu only when it changes.
+  icon that refreshes every 2 s and rebuilds the menu only when it changes.
 - **Feedback** (`actions.py`, new `labels` table): mark latest alert wrong;
   "I'm slouching now" stores a label linked to the latest sample within 10 s.
 - **Calibration and settings windows** (`calibrate_ui.py`, `settings_ui.py`):
@@ -75,7 +75,7 @@ Not opened yet: Stage 1 is not merged to `main`. This body will be used when it 
 | 24 | Settings autostart toggle | `test_settings_autostart_toggle_uses_the_same_run_value`; `test_settings_ui.py::test_current_includes_autostart` |
 
 Checks run locally: `ruff format --check`, `ruff check`, `mypy`, `pytest`
-(299 passed, 1 skipped: the L1 live test) and `scripts/check_ownership.py`, all passing.
+(317 passed, 1 skipped: the L1 live test) and `scripts/check_ownership.py`, all passing.
 
 ## Not done or not verified
 
@@ -99,7 +99,7 @@ recording `slouch` takes a hover plus a click, not one click.
 - The "stop == 0 means in use" registry rule while a real call runs (L2).
   Whether our own camera use is recorded under the venv `python(w).exe` or the
   base interpreter is also untested; both are excluded.
-- The pystray icon, its 1 s refresh and the Tk windows were never shown.
+- The pystray icon, its 2 s refresh and the Tk windows were never shown.
   pystray loads (`pystray._win32.Icon`) and the icon image draws in memory.
 - Toast `message()` with an "Open" button (Calibrate to start, already
   running, error, label confirmation) is untested on a real desktop.
@@ -117,6 +117,31 @@ recording `slouch` takes a hover plus a click, not one click.
 **Owner live checks still to run** (spec section 5): L1 camera sharing (then
 answer decision 1), L2 video call, L3 lock, L4 sign out and in, L5 low battery,
 L6 install / uninstall, L7 tray actions, L8 nobody present.
+
+## Review findings addressed
+
+Each fix has a unit test that fails without it.
+
+| # | Severity | Finding | Fix | Test |
+|---|---|---|---|---|
+| 1 | Major | An entry with `LastUsedTimeStop == 0` left by a crashed or hibernated app paused us forever | Entries whose `LastUsedTimeStart` is older than `STALE_AFTER_S` (12 h) are ignored and logged once. The check uses an injected FILETIME clock, which the app passes (`filetime_now`). See the note below. | `test_camera_usage.py::test_entry_open_longer_than_12_hours_is_stale_and_logged_once`, `test_filetime_now_matches_wall_clock` |
+| 2 | Major | Two quick calibrate requests could start two windows | `start_calibration` claims a lock without blocking before it spawns the worker. A second request returns False. The tray shows `calibrating` from the moment of the claim. | `test_app.py::test_second_calibration_request_is_refused_synchronously` |
+| 3 | Minor | Tray pause and resume could block on the monitor lock | Tray actions only update the supervisor. The worker's 5 s pause poll releases the camera. | `test_app.py::test_tray_pause_does_not_wait_for_the_monitor` |
+| 4 | Minor | A probe that raised crashed every step; lock-probe failures were silent | Each probe is wrapped: a failure is logged once and counts as no reason. `OpenInputDesktop` "access denied" means locked; any other error is logged once and treated as unlocked. | `test_pausing.py::test_failing_probe_counts_as_no_reason_and_logs_once`, `test_failing_battery_probe_never_pauses`; `test_power.py` |
+| 5 | Minor | The error toast never showed again after a recovery | Reset after the first successful step | `test_app.py::test_error_toast_shown_again_after_a_recovery` |
+| 6 | Minor | Tray refresh cost and thread safety | Refresh every 2 s. The latest-alert state is cached for 10 s and reset at once by a new alert or "mark wrong". `refresh()` runs under a lock. | `test_tray.py::test_refresh_interval_meets_spec_target`, `test_concurrent_refreshes_are_serialised`; `test_app.py::test_alert_state_is_cached_and_refreshed_on_new_alert` |
+| 7 | Minor | The scripts matched processes by command-line text | The shared `scripts/posture-checker-processes.ps1` matches this checkout's `.venv\Scripts\{pythonw,python,posture-checker}.exe`, plus their child processes (the base interpreter that the uv launcher starts). Install checks only the app; uninstall also stops the calibrate and settings windows. The helper ran read-only here (0 matches; the app-only regex was checked on sample command lines). | `test_install_scripts.py` |
+| 8 | Minor | A second instance opened the first one's log | `claim_single_instance` takes the mutex before `setup_logging()` | `test_app.py::test_second_instance_exits_before_touching_the_log` |
+
+**Note on finding 1.** The stale check is off unless a FILETIME clock is
+passed in; the real app always passes one. The acceptance tests build entries
+with `LastUsedTimeStart = 100` and expect them to count as in use. As a
+FILETIME, 100 is in the year 1601, so a check that was always on would mark
+them stale and fail those tests. The tests can't be edited, so the check is
+opt-in.
+
+Left as is, as agreed: the `store()` / `save()` alias, the slouch submenu, and
+the default `camera_mode = "hold"`.
 
 ## New dependencies
 
