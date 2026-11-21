@@ -5,9 +5,10 @@ MLOps loop: user feedback becomes labeled data, models are versioned and
 retrained on a schedule, and a new model is deployed only if it beats the
 current one.
 
-> **Status: Stage 1 of 6.** Detection, calibration and alerts work from a
-> terminal with a rule-based baseline model. The background tray app, summaries,
-> trained model, retraining loop and drift detection are the next stages. This
+> **Status: Stage 2 of 6 (live checks pending).** Detection, calibration and
+> alerts run as a background tray app that starts at login and pauses itself.
+> Summaries, the trained model, the retraining loop and drift detection are the
+> next stages. This
 > README grows with each stage; results tables are filled in only with numbers
 > that were actually measured.
 
@@ -23,8 +24,31 @@ current one.
   edge of the frame produce `low_confidence` samples, which never trigger alerts.
 - Stores measurements, alerts and "wrong alert" feedback in a local SQLite
   database, each row tagged with the model version and calibration that produced it.
+- Runs in the background with a tray icon (green monitoring, grey paused, amber
+  needs calibration or camera unavailable). It pauses and releases the webcam
+  while another app uses it, while the screen is locked and on low battery,
+  and samples only every 30 s after 5 minutes with nobody at the desk.
+- Tray menu: pause / resume, mark the latest alert wrong, "I'm slouching now"
+  (stored as a label for later training), calibrate, settings, open data folder.
 
-## Quick start (Stage 1)
+## Install (Stage 2)
+
+From the repository folder, in PowerShell (no admin rights needed):
+
+```powershell
+.\install.ps1                # uv sync, pose model, autostart at login, start the app
+.\install.ps1 -NoAutostart   # same, without starting at login
+.\uninstall.ps1              # stop the app, remove autostart; keeps your data
+.\uninstall.ps1 -RemoveData  # also delete %LOCALAPPDATA%\PostureChecker
+```
+
+The app logs to `%LOCALAPPDATA%\PostureChecker\posture-checker.log` (rotating,
+at most 3 x 1 MB). `camera_mode` (`hold` or `burst`) is in Settings; the
+default stays `hold` until the camera sharing probe
+(`uv run python scripts/camera_share_probe.py`) has been run; see
+`docs/results/camera-sharing.md`.
+
+## Terminal use (Stage 1)
 
 Requires Windows 10/11 and [uv](https://docs.astral.sh/uv/).
 
@@ -40,7 +64,6 @@ Useful while testing: `uv run posture-checker run --window 20 --cooldown 30`
 alerts after 20 seconds instead of 60.
 
 Settings persist with `posture-checker config --window 90 --sensitivity 1.2`.
-The one-command installer with autostart arrives in Stage 2.
 
 ## Architecture
 
