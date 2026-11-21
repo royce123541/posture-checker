@@ -336,3 +336,21 @@ def test_second_instance_exits_before_touching_the_log() -> None:
     assert started == ["1"]  # the second instance never set up logging
     assert second.messages == [ALREADY_RUNNING]
     assert first.messages == []
+
+
+def test_tray_status_follows_pause_and_resume_without_a_monitor_step(
+    db, calibration, clock
+) -> None:
+    rig, app = make_app(db, calibration, clock)
+    rig.lock.locked = True
+    app.tick()  # one real check: locked
+    rig.lock.locked = False  # unlocked, but no check has run since
+    app.tray_actions()[tray.PAUSE_15]()
+    assert app.status() == ("grey", "Paused: by you, screen locked")
+    app.tray_actions()[tray.RESUME]()
+    assert app.status() == ("grey", "Paused: screen locked")  # only manual cleared
+    app.tick()
+    app.tray_actions()[tray.PAUSE_UNTIL_RESUMED]()
+    assert app.status() == ("grey", "Paused: by you")
+    app.tray_actions()[tray.RESUME]()
+    assert app.status()[0] == "green"

@@ -99,11 +99,16 @@ class PauseSupervisor:
         """Pause for ``seconds``, or until ``resume_manual`` when None."""
         with self._lock:
             self._manual_until = float("inf") if seconds is None else self.clock() + seconds
+            # Show it in ``reasons`` now, so the tray updates without waiting
+            # for the next check (spec behaviour 12: within 2 s).
+            if MANUAL not in self._last.reasons:
+                self._last = PauseDecision([MANUAL, *self._last.reasons])
 
     def resume_manual(self) -> None:
         """Clear only the manual reason; automatic reasons keep holding."""
         with self._lock:
             self._manual_until = None
+            self._last = PauseDecision([r for r in self._last.reasons if r != MANUAL])
 
     @property
     def manual_active(self) -> bool:
