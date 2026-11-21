@@ -40,19 +40,16 @@ if ($NoAutostart) { $registerArgs += "--no-autostart" }
 & $python @registerArgs
 if ($LASTEXITCODE -ne 0) { throw "register failed" }
 
-function Get-PostureCheckerProcess {
-    Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe' OR Name = 'python.exe'" |
-        Where-Object { $_.CommandLine -like "*-m posture_checker app*" }
-}
+. (Join-Path $PSScriptRoot "scripts\posture-checker-processes.ps1")
 
 Write-Host "4/4 Starting the app..."
-if (Get-PostureCheckerProcess) {
+if (Get-PostureCheckerProcess -RepoRoot $PSScriptRoot -AppOnly) {
     Write-Host "Posture Checker is already running; leaving it as it is."
 } else {
     Start-Process -FilePath $pythonw -ArgumentList "-m", "posture_checker", "app" -WorkingDirectory $PSScriptRoot
     # pythonw has no console, so an early crash would be invisible: check it survived.
     Start-Sleep -Seconds 5
-    if (Get-PostureCheckerProcess) {
+    if (Get-PostureCheckerProcess -RepoRoot $PSScriptRoot -AppOnly) {
         Write-Host "Posture Checker is running. Look for its icon in the system tray."
     } else {
         $log = Join-Path $env:LOCALAPPDATA "PostureChecker\posture-checker.log"

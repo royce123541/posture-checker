@@ -20,8 +20,9 @@ $ErrorActionPreference = "Continue"
 Set-Location -Path $PSScriptRoot
 
 Write-Host "Stopping Posture Checker if it is running..."
-Get-CimInstance Win32_Process -Filter "Name = 'pythonw.exe' OR Name = 'python.exe'" |
-    Where-Object { $_.CommandLine -like "*-m posture_checker app*" } |
+# The app plus any calibrate / settings windows, from this checkout only.
+. (Join-Path $PSScriptRoot "scripts\posture-checker-processes.ps1")
+Get-PostureCheckerProcess -RepoRoot $PSScriptRoot |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
 $python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
