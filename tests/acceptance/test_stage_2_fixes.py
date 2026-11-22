@@ -7,18 +7,18 @@ posture_checker.tray.TrayState
     ``presence_check`` (presence-check mode is on).
 posture_checker.tray.tray_status(state)
     precedence: paused reasons > uncalibrated > camera unavailable > away.
-    away -> (GREEN, "Posture Checker: away"); away and presence_check ->
-    (GREEN, "Posture Checker: away, checking every 30 s") where 30 is
+    away -> (GREEN, "Hunch: away"); away and presence_check ->
+    (GREEN, "Hunch: away, checking every 30 s") where 30 is
     posture_checker.monitor.PRESENCE_CHECK_INTERVAL_S formatted as an int.
 posture_checker.app: App.state() fills the two new fields (not tested here).
 posture_checker.platform.autostart
-    SHORTCUT_NAME = "Posture Checker.lnk"
+    SHORTCUT_NAME = "Hunch.lnk"
     enable_autostart(registry, *, writer, startup_dir: Path) -> None
     disable_autostart(registry, *, startup_dir: Path) -> None  (no error if gone)
     is_autostart_enabled(*, startup_dir: Path) -> bool  (shortcut file exists)
     writer.create(path: Path, target: Path, arguments: str, working_dir: Path,
                   minimised: bool) -> None
-      target = pythonw_executable(); arguments = "-m posture_checker app";
+      target = hunch.exe next to sys.executable; arguments = "" (see stage-2-rename);
       working_dir = repository root; path = startup_dir / SHORTCUT_NAME.
     Both enable and disable delete the old Run value "PostureChecker".
     A real writer class (WScript.Shell through PowerShell) is not tested.
@@ -58,10 +58,10 @@ def tray():
 @pytest.mark.parametrize(
     ("state", "expected"),
     [
-        ({"away": True}, "Posture Checker: away"),
+        ({"away": True}, "Hunch: away"),
         (
             {"away": True, "presence_check": True},
-            f"Posture Checker: away, checking every {int(mon.PRESENCE_CHECK_INTERVAL_S)} s",
+            f"Hunch: away, checking every {int(mon.PRESENCE_CHECK_INTERVAL_S)} s",
         ),
     ],
 )
@@ -76,7 +76,7 @@ def test_presence_check_interval_comes_from_the_constant(monkeypatch):
     """F1: the number in the tooltip is PRESENCE_CHECK_INTERVAL_S, not a copy."""
     monkeypatch.setattr(mon, "PRESENCE_CHECK_INTERVAL_S", 45.0)
     _, tooltip = tray().tray_status(tray().TrayState(away=True, presence_check=True))
-    assert tooltip == "Posture Checker: away, checking every 45 s"
+    assert tooltip == "Hunch: away, checking every 45 s"
 
 
 def test_paused_wins_over_away():
@@ -92,19 +92,19 @@ def test_uncalibrated_wins_over_away():
     """F1: uncalibrated beats away."""
     colour, tooltip = tray().tray_status(tray().TrayState(away=True, calibrated=False))
     assert colour == tray().AMBER
-    assert tooltip == "Posture Checker: calibrate to start"
+    assert tooltip == "Hunch: calibrate to start"
 
 
 def test_camera_unavailable_wins_over_away():
     """F1: camera unavailable beats away."""
     colour, tooltip = tray().tray_status(tray().TrayState(away=True, camera_available=False))
     assert colour == tray().AMBER
-    assert tooltip == "Posture Checker: camera unavailable"
+    assert tooltip == "Hunch: camera unavailable"
 
 
 def test_not_away_still_says_monitoring():
     """F1: the default state is unchanged."""
-    assert tray().tray_status(tray().TrayState()) == (tray().GREEN, "Posture Checker: monitoring")
+    assert tray().tray_status(tray().TrayState()) == (tray().GREEN, "Hunch: monitoring")
 
 
 # --- F2 -----------------------------------------------------------------------
@@ -113,33 +113,33 @@ def auto():
 
 
 def test_enable_creates_shortcut_with_target_arguments_and_folder(
-    registry, shortcut_writer, startup_dir
+    hunch_exe, registry, shortcut_writer, startup_dir
 ):
-    """F2: enabling writes 'Posture Checker.lnk' with the right command, folder, minimised."""
+    """F2: enabling writes 'Hunch.lnk' with the right command, folder, minimised."""
     auto().enable_autostart(registry, writer=shortcut_writer, startup_dir=startup_dir)
-    shortcut = startup_dir / "Posture Checker.lnk"
+    shortcut = startup_dir / "Hunch.lnk"
     assert shortcut.exists()
     (call,) = shortcut_writer.created
     assert call["path"] == shortcut
-    assert Path(call["target"]) == auto().pythonw_executable()
-    assert call["arguments"] == "-m posture_checker app"
+    assert Path(call["target"]) == hunch_exe
+    assert call["arguments"] == ""
     assert Path(call["working_dir"]).resolve() == REPO
     assert call["minimised"] is True
 
 
-def test_disable_deletes_shortcut(registry, shortcut_writer, startup_dir):
+def test_disable_deletes_shortcut(hunch_exe, registry, shortcut_writer, startup_dir):
     """F2: disabling deletes the shortcut."""
     auto().enable_autostart(registry, writer=shortcut_writer, startup_dir=startup_dir)
     auto().disable_autostart(registry, startup_dir=startup_dir)
-    assert not (startup_dir / "Posture Checker.lnk").exists()
+    assert not (startup_dir / "Hunch.lnk").exists()
 
 
-def test_status_follows_the_shortcut(registry, shortcut_writer, startup_dir):
+def test_status_follows_the_shortcut(hunch_exe, registry, shortcut_writer, startup_dir):
     """F2: 'is autostart on' means the shortcut exists."""
     assert auto().is_autostart_enabled(startup_dir=startup_dir) is False
     auto().enable_autostart(registry, writer=shortcut_writer, startup_dir=startup_dir)
     assert auto().is_autostart_enabled(startup_dir=startup_dir) is True
-    (startup_dir / "Posture Checker.lnk").unlink()
+    (startup_dir / "Hunch.lnk").unlink()
     assert auto().is_autostart_enabled(startup_dir=startup_dir) is False
 
 
@@ -149,7 +149,7 @@ def test_a_run_value_alone_does_not_count_as_enabled(registry, startup_dir):
     assert auto().is_autostart_enabled(startup_dir=startup_dir) is False
 
 
-def test_enable_removes_left_over_run_value(registry, shortcut_writer, startup_dir):
+def test_enable_removes_left_over_run_value(hunch_exe, registry, shortcut_writer, startup_dir):
     """F2: enabling removes the old Run value so the app never starts twice."""
     registry.set_value(RUN_KEY, RUN_NAME, "old command")
     registry.set_value(RUN_KEY, "Other", "keep me")
@@ -171,7 +171,9 @@ def test_disable_with_nothing_there_is_harmless(registry, startup_dir):
     assert auto().is_autostart_enabled(startup_dir=startup_dir) is False
 
 
-def test_settings_checkbox_uses_the_same_functions(registry, shortcut_writer, startup_dir):
+def test_settings_checkbox_uses_the_same_functions(
+    hunch_exe, registry, shortcut_writer, startup_dir
+):
     """F2: Settings' autostart checkbox creates and deletes the shortcut."""
     ui = import_module("posture_checker.settings_ui")
     save_config(Config())
@@ -180,11 +182,11 @@ def test_settings_checkbox_uses_the_same_functions(registry, shortcut_writer, st
     )
     assert controller.current()["autostart"] is False
     assert controller.save({"autostart": True}) is None
-    assert (startup_dir / "Posture Checker.lnk").exists()
+    assert (startup_dir / "Hunch.lnk").exists()
     assert controller.current()["autostart"] is True
     assert registry.run_values() == {}
     assert controller.save({"autostart": False}) is None
-    assert not (startup_dir / "Posture Checker.lnk").exists()
+    assert not (startup_dir / "Hunch.lnk").exists()
     assert controller.current()["autostart"] is False
 
 

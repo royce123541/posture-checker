@@ -297,6 +297,24 @@ def shortcut_writer() -> FakeShortcutWriter:
 
 
 @pytest.fixture
+def hunch_exe(tmp_path, monkeypatch):
+    """A fake interpreter folder holding python.exe and hunch.exe; sys.executable points there.
+
+    Autostart looks for ``hunch.exe`` next to the running interpreter, so tests
+    that enable autostart use this fixture. Returns the hunch.exe path.
+    """
+    import sys
+
+    scripts = tmp_path / "fake-venv" / "Scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "python.exe").write_text("")
+    exe = scripts / "hunch.exe"
+    exe.write_text("")
+    monkeypatch.setattr(sys, "executable", str(scripts / "python.exe"))
+    return exe
+
+
+@pytest.fixture
 def startup_dir(tmp_path):
     folder = tmp_path / "Startup"
     folder.mkdir()

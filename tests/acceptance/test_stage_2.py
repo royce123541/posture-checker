@@ -29,7 +29,7 @@ posture_checker.platform.camera_usage
     the FakeRegistry in conftest: subkeys(path), values(path), set_value,
     delete_value, delete_key; FileNotFoundError for a missing key).
 posture_checker.platform.autostart
-    Autostart is the "Posture Checker.lnk" shortcut in a Startup folder (see
+    Autostart is the "Hunch.lnk" shortcut in a Startup folder (see
     test_stage_2_fixes.py): enable_autostart(registry, *, writer, startup_dir),
     disable_autostart(registry, *, startup_dir) (no error if absent),
     is_autostart_enabled(*, startup_dir). Both remove an old "PostureChecker"
@@ -752,25 +752,25 @@ def test_monitor_error_is_logged_toasted_once_and_restarts_after_30s(make_rig, d
 
 
 # --- 22 -----------------------------------------------------------------------
-def test_enable_autostart_writes_one_shortcut(registry, shortcut_writer, startup_dir):
-    """Behaviour 22: one Startup shortcut running pythonw -m posture_checker app."""
+def test_enable_autostart_writes_one_shortcut(hunch_exe, registry, shortcut_writer, startup_dir):
+    """Behaviour 22: one Startup shortcut running hunch.exe with no arguments."""
     auto = import_module("posture_checker.platform.autostart")
     auto.enable_autostart(registry, writer=shortcut_writer, startup_dir=startup_dir)
     auto.enable_autostart(registry, writer=shortcut_writer, startup_dir=startup_dir)
-    assert [p.name for p in startup_dir.iterdir()] == ["Posture Checker.lnk"]
+    assert [p.name for p in startup_dir.iterdir()] == ["Hunch.lnk"]
     call = shortcut_writer.created[-1]
-    assert "pythonw.exe" in str(call["target"])
-    assert call["arguments"] == "-m posture_checker app"
+    assert Path(call["target"]) == hunch_exe
+    assert call["arguments"] == ""
     assert registry.run_values() == {}
     assert auto.is_autostart_enabled(startup_dir=startup_dir) is True
 
 
-def test_register_adds_aumid_and_shortcut(registry, shortcut_writer, startup_dir):
+def test_register_adds_aumid_and_shortcut(hunch_exe, registry, shortcut_writer, startup_dir):
     """Behaviour 22: the Python part of install registers AUMID and the shortcut."""
     install = import_module("posture_checker.install")
     install.register(registry, writer=shortcut_writer, startup_dir=startup_dir)
     assert AUMID_KEY in registry.keys
-    assert (startup_dir / "Posture Checker.lnk").exists()
+    assert (startup_dir / "Hunch.lnk").exists()
 
 
 def test_register_without_autostart_skips_shortcut(registry, shortcut_writer, startup_dir):
@@ -791,7 +791,7 @@ def test_install_script_mentions_run_value_and_aumid():
 
 
 # --- 23 -----------------------------------------------------------------------
-def test_unregister_removes_shortcut_and_aumid(registry, shortcut_writer, startup_dir):
+def test_unregister_removes_shortcut_and_aumid(hunch_exe, registry, shortcut_writer, startup_dir):
     """Behaviour 23: uninstall removes the Startup shortcut and the AUMID key."""
     install = import_module("posture_checker.install")
     install.register(registry, writer=shortcut_writer, startup_dir=startup_dir)
@@ -826,7 +826,9 @@ def test_uninstall_script_exists():
 
 
 # --- 24 -----------------------------------------------------------------------
-def test_settings_autostart_toggle_uses_the_same_shortcut(registry, shortcut_writer, startup_dir):
+def test_settings_autostart_toggle_uses_the_same_shortcut(
+    hunch_exe, registry, shortcut_writer, startup_dir
+):
     """Behaviour 24: toggling autostart in Settings adds or removes the shortcut."""
     ui = import_module("posture_checker.settings_ui")
     save_config(Config())
@@ -834,6 +836,6 @@ def test_settings_autostart_toggle_uses_the_same_shortcut(registry, shortcut_wri
         paths.config_path(), registry, writer=shortcut_writer, startup_dir=startup_dir
     )
     assert controller.save({"autostart": True}) is None
-    assert (startup_dir / "Posture Checker.lnk").exists()
+    assert (startup_dir / "Hunch.lnk").exists()
     assert controller.save({"autostart": False}) is None
-    assert not (startup_dir / "Posture Checker.lnk").exists()
+    assert not (startup_dir / "Hunch.lnk").exists()
