@@ -55,6 +55,11 @@ class Config:
     #: detection, C8). On by default; off is the way out of a wrong heuristic.
     pause_in_calls: bool = True
 
+    # --- Monitoring -----------------------------------------------------------
+    #: Seconds per row in the ``metrics`` table (spec Stage 3, decision 2: one
+    #: row a minute is cheap and fine enough for CPU and battery trends).
+    metrics_interval_s: float = 60.0
+
     def validate(self) -> None:
         if self.sample_interval_s <= 0 or self.suspect_interval_s <= 0:
             raise ValueError("sampling intervals must be positive")
@@ -72,6 +77,8 @@ class Config:
             raise ValueError("battery_pause_percent must be between 0 and 100")
         if not isinstance(self.pause_in_calls, bool):
             raise ValueError("pause_in_calls must be true or false")
+        if self.metrics_interval_s <= 0:
+            raise ValueError("metrics_interval_s must be positive")
         if self.camera_mode not in CAMERA_MODES:
             raise ValueError(f"camera_mode must be one of {', '.join(CAMERA_MODES)}")
 

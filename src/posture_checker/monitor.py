@@ -45,6 +45,14 @@ PRESENCE_CHECK_INTERVAL_S = 30.0
 PAUSED_CHECK_INTERVAL_S = 5.0
 
 
+class Recorder(Protocol):
+    """Takes every sample for the per-minute metrics (Stage 3, behaviour 3)."""
+
+    def observe(self, sample: Sample) -> None: ...
+
+    def poll(self) -> None: ...
+
+
 class Notifier(Protocol):
     def alert(
         self,
@@ -85,6 +93,7 @@ class Monitor:
         notifier: Notifier,
         clock: Callable[[], float] = time.time,
         supervisor: PauseSupervisor | None = None,
+        recorder: Recorder | None = None,
     ) -> None:
         self.config = config
         self.db = db
@@ -94,6 +103,7 @@ class Monitor:
         self.notifier = notifier
         self.clock = clock
         self.supervisor = supervisor
+        self.recorder = recorder
         self.policy = AlertPolicy(
             window_s=config.alert_window_s,
             bad_fraction=config.bad_fraction,
@@ -199,6 +209,10 @@ class Monitor:
             # go of the camera between samples.
             if self.config.camera_mode == "burst" or self.presence_check:
                 self.release_camera()
+            if self.recorder is not None:
+                # Every sample, paused ones too, so paused minutes get a row.
+                self.recorder.observe(sample)
+                self.recorder.poll()
             return sample
 
     def _track_away(self, state: str, now: float) -> None:
