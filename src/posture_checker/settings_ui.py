@@ -18,6 +18,9 @@ from typing import Any
 from posture_checker.config import CAMERA_MODES, Config, load_config, save_config
 from posture_checker.monitor import Monitor
 from posture_checker.platform.autostart import (
+    ShortcutWriter,
+    WScriptShortcutWriter,
+    default_startup_dir,
     disable_autostart,
     enable_autostart,
     is_autostart_enabled,
@@ -43,9 +46,19 @@ FIELDS: dict[str, tuple[str, type]] = {
 
 
 class SettingsController:
-    def __init__(self, config_path: Path, registry: Registry) -> None:
+    def __init__(
+        self,
+        config_path: Path,
+        registry: Registry,
+        *,
+        writer: ShortcutWriter | None = None,
+        startup_dir: Path | None = None,
+    ) -> None:
+        """``writer`` and ``startup_dir`` default to the real WScript writer and Startup folder."""
         self.config_path = config_path
         self.registry = registry
+        self.writer: ShortcutWriter = writer if writer is not None else WScriptShortcutWriter()
+        self.startup_dir = startup_dir if startup_dir is not None else default_startup_dir()
 
     def current(self) -> dict[str, Any]:
         """Current values of every field, for filling in the form."""
@@ -54,7 +67,7 @@ class SettingsController:
         except (ValueError, OSError):
             config = Config()
         values: dict[str, Any] = {k: getattr(config, k) for k in FIELDS if k != "autostart"}
-        values["autostart"] = is_autostart_enabled(self.registry)
+        values["autostart"] = is_autostart_enabled(startup_dir=self.startup_dir)
         return values
 
     def parse_form(self, texts: Mapping[str, str | bool]) -> dict[str, Any] | str:
@@ -97,9 +110,9 @@ class SettingsController:
         save_config(config, self.config_path)
         if "autostart" in values:
             if values["autostart"]:
-                enable_autostart(self.registry)
+                enable_autostart(self.registry, writer=self.writer, startup_dir=self.startup_dir)
             else:
-                disable_autostart(self.registry)
+                disable_autostart(self.registry, startup_dir=self.startup_dir)
         return None
 
 

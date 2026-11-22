@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from acceptance.conftest import FakeRegistry
+from acceptance.conftest import FakeRegistry, FakeShortcutWriter
 from conftest import FakeCamera, FakePose, RecordingNotifier
 from posture_checker import paths
 from posture_checker.config import Config, load_config, save_config
@@ -14,10 +14,19 @@ from posture_checker.settings_ui import WATCH_INTERVAL_S, ConfigWatcher, Setting
 from posture_checker.synthetic import make_landmarks
 
 
+def make_controller(tmp_path) -> SettingsController:
+    return SettingsController(
+        paths.config_path(),
+        FakeRegistry(),
+        writer=FakeShortcutWriter(),
+        startup_dir=tmp_path / "Startup",
+    )
+
+
 @pytest.fixture
-def controller() -> SettingsController:
+def controller(tmp_path) -> SettingsController:
     save_config(Config())
-    return SettingsController(paths.config_path(), FakeRegistry())
+    return make_controller(tmp_path)
 
 
 def test_current_includes_autostart(controller) -> None:
@@ -68,8 +77,8 @@ def test_invalid_values_leave_file_and_autostart_untouched(controller, values) -
     assert controller.registry.run_values() == {}
 
 
-def test_missing_file_starts_from_defaults() -> None:
-    controller = SettingsController(paths.config_path(), FakeRegistry())
+def test_missing_file_starts_from_defaults(tmp_path) -> None:
+    controller = make_controller(tmp_path)
     assert controller.save({"cooldown_s": 30.0}) is None
     assert load_config().cooldown_s == 30.0
 

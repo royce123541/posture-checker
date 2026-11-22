@@ -339,10 +339,14 @@ class Monitor:
         self.db.log_event(self.clock(), "start", self.model.version)
         try:
             while not stop.is_set():
+                started = self.clock()
                 sample = self.step()
                 if on_sample is not None:
                     on_sample(sample)
-                stop.wait(self.next_interval(sample))
+                # Fixes F3: count the sample's own time against the interval, so the
+                # interval is start-to-start; never a negative wait.
+                took = self.clock() - started
+                stop.wait(max(0.0, self.next_interval(sample) - took))
         finally:
             self.release_camera()
             self.db.log_event(self.clock(), "stop")

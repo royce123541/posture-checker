@@ -56,6 +56,10 @@ class TrayState:
     camera_available: bool = True
     has_recent_alert: bool = False
     latest_alert_marked: bool = False
+    #: The latest sample found nobody at the desk (Stage 2 fixes, F1).
+    away: bool = False
+    #: Presence-check mode is on (away for longer than PRESENCE_CHECK_AFTER_S).
+    presence_check: bool = False
 
 
 @dataclass(frozen=True)
@@ -120,7 +124,7 @@ def describe_reason(reason: str) -> str:
 
 
 def tray_status(state: TrayState) -> tuple[str, str]:
-    """Icon colour and tooltip for ``state`` (spec behaviour 12, decision 3)."""
+    """Icon colour and tooltip for ``state`` (spec behaviour 12, decision 3; fixes F1)."""
     if state.paused_reasons:
         text = "Paused: " + ", ".join(describe_reason(r) for r in state.paused_reasons)
         return GREY, text[:TOOLTIP_MAX]
@@ -128,6 +132,14 @@ def tray_status(state: TrayState) -> tuple[str, str]:
         return AMBER, "Posture Checker: calibrate to start"
     if not state.camera_available:
         return AMBER, "Posture Checker: camera unavailable"
+    if state.away:
+        if state.presence_check:
+            # Read at call time so the tooltip never holds a second copy of the number.
+            from posture_checker import monitor
+
+            seconds = int(monitor.PRESENCE_CHECK_INTERVAL_S)
+            return GREEN, f"Posture Checker: away, checking every {seconds} s"
+        return GREEN, "Posture Checker: away"
     return GREEN, "Posture Checker: monitoring"
 
 

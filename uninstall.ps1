@@ -3,8 +3,8 @@
     Uninstall Posture Checker for the current user.
 
 .DESCRIPTION
-    Stops the running app, removes the HKCU Run value "PostureChecker" and the
-    toast identity key HKCU\Software\Classes\AppUserModelId\PostureChecker.App.
+    Stops the running app, removes the Startup-folder shortcut "Posture Checker.lnk"
+    (and any old HKCU Run value "PostureChecker") and the toast identity key HKCU\Software\Classes\AppUserModelId\PostureChecker.App.
     Your data (database, calibrations, settings, log) in
     %LOCALAPPDATA%\PostureChecker is kept unless -RemoveData is given.
     Safe to run twice, or without a prior install.
@@ -25,21 +25,18 @@ Write-Host "Stopping Posture Checker if it is running..."
 Get-PostureCheckerProcess -RepoRoot $PSScriptRoot |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
+# Always the Python code path (posture_checker.install), never a copy of it here.
+$unregisterArgs = @("-m", "posture_checker.install", "unregister")
+if ($RemoveData) { $unregisterArgs += "--remove-data" }
 $python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
 if (Test-Path $python) {
-    $unregisterArgs = @("-m", "posture_checker.install", "unregister")
-    if ($RemoveData) { $unregisterArgs += "--remove-data" }
     & $python @unregisterArgs
+} elseif (Get-Command uv -ErrorAction SilentlyContinue) {
+    # No venv (never installed, or deleted): let uv build one to run the same code.
+    uv run python @unregisterArgs
 } else {
-    # No venv (never installed, or deleted): do the same with PowerShell.
-    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" `
-        -Name "PostureChecker" -ErrorAction SilentlyContinue
-    Remove-Item -Path "HKCU:\Software\Classes\AppUserModelId\PostureChecker.App" `
-        -Recurse -ErrorAction SilentlyContinue
-    if ($RemoveData) {
-        Remove-Item -Path (Join-Path $env:LOCALAPPDATA "PostureChecker") `
-            -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    Write-Warning "No .venv and no uv found: could not remove autostart or the toast identity."
+    exit 1
 }
 
 if ($RemoveData) {

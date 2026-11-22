@@ -7,14 +7,16 @@
     1. uv sync                          (dependencies into .venv)
     2. fetch the pose model             (checksum-verified)
     3. register the toast AUMID         (HKCU\Software\Classes\AppUserModelId\PostureChecker.App)
-       and the HKCU Run value "PostureChecker"
-       -> "<repo>\.venv\Scripts\pythonw.exe" -m posture_checker app
+       and the Startup-folder shortcut "Posture Checker.lnk"
+       -> "<repo>\.venv\Scripts\pythonw.exe" -m posture_checker app (minimised)
+       Both go through `python -m posture_checker.install register`, the same
+       code the Settings window uses. An old "PostureChecker" Run value is removed.
     4. start the app and report whether it is still running after 5 seconds.
-    Running it again is safe: the Run value is overwritten (one value) and the
+    Running it again is safe: the shortcut is overwritten (one shortcut) and the
     app's single-instance lock makes a second copy exit at once.
 
 .PARAMETER NoAutostart
-    Do not start the app at login (removes the Run value if present).
+    Do not start the app at sign-in (removes the shortcut if present).
 #>
 param(
     [switch]$NoAutostart
@@ -34,7 +36,7 @@ Write-Host "2/4 Fetching the pose model..."
 & $python -m posture_checker fetch-model
 if ($LASTEXITCODE -ne 0) { throw "fetch-model failed" }
 
-Write-Host "3/4 Registering toast identity (PostureChecker.App) and autostart (PostureChecker)..."
+Write-Host "3/4 Registering toast identity (PostureChecker.App) and autostart (Startup shortcut "Posture Checker")..."
 $registerArgs = @("-m", "posture_checker.install", "register")
 if ($NoAutostart) { $registerArgs += "--no-autostart" }
 & $python @registerArgs

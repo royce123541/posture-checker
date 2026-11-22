@@ -20,7 +20,7 @@ from typing import Protocol
 from posture_checker import actions, paths
 from posture_checker import tray as tray_mod
 from posture_checker.calibrate_flow import Launcher, gui_command, launch, run_calibration
-from posture_checker.monitor import CAMERA_UNAVAILABLE, PAUSED, Monitor, Sample
+from posture_checker.monitor import AWAY, CAMERA_UNAVAILABLE, PAUSED, Monitor, Sample
 from posture_checker.platform.camera_usage import RegistryCameraUsage, filetime_now
 from posture_checker.platform.registry import Registry
 from posture_checker.platform.single_instance import InstanceLock
@@ -141,6 +141,8 @@ class App:
             camera_available=self.monitor.last_state != CAMERA_UNAVAILABLE,
             has_recent_alert=has_recent,
             latest_alert_marked=marked,
+            away=self.monitor.last_state == AWAY,
+            presence_check=self.monitor.presence_check,
         )
 
     def status(self) -> tuple[str, str]:
@@ -176,7 +178,9 @@ class App:
         self._error_shown = False
         if sample.alert_id is not None:
             self._forget_alert_state()  # "Mark latest alert wrong" becomes available
-        return self.monitor.next_interval(sample)
+        # Fixes F3: the interval runs from one sample's start to the next.
+        took = self.clock() - now
+        return max(0.0, self.monitor.next_interval(sample) - took)
 
     def _pause_changed(self) -> bool:
         """True if the paused/running decision differs from the last sample's."""

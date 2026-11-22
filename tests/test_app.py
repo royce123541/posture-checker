@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 
-from acceptance.conftest import FakeLauncher, FakeRegistry, Rig
+from acceptance.conftest import FakeLauncher, FakeRegistry, FakeShortcutWriter, Rig
 from posture_checker import install, paths, tray
 from posture_checker import monitor as mon
 from posture_checker.app import ALERT_STATE_CACHE_S, App, setup_logging
@@ -176,17 +176,19 @@ def test_setup_logging_twice_keeps_one_file_handler() -> None:
                 root.removeHandler(handler)
 
 
-def test_register_then_unregister_leaves_registry_empty() -> None:
+def test_register_then_unregister_leaves_registry_and_startup_empty(tmp_path) -> None:
     registry = FakeRegistry()
-    install.register(registry)
-    install.register(registry)
-    assert list(registry.run_values()) == ["PostureChecker"]
-    install.unregister(registry)
+    startup = tmp_path / "Startup"
+    install.register(registry, writer=FakeShortcutWriter(), startup_dir=startup)
+    install.register(registry, writer=FakeShortcutWriter(), startup_dir=startup)
+    assert [p.name for p in startup.iterdir()] == ["Posture Checker.lnk"]
+    install.unregister(registry, startup_dir=startup)
+    assert list(startup.iterdir()) == []
     assert registry.run_values() == {}
     assert install.AUMID_KEY not in registry.keys
 
 
-def test_unregister_survives_registry_errors() -> None:
+def test_unregister_survives_registry_errors(tmp_path) -> None:
     class Broken(FakeRegistry):
         def delete_value(self, path, name):
             raise PermissionError(name)
@@ -194,13 +196,13 @@ def test_unregister_survives_registry_errors() -> None:
         def delete_key(self, path):
             raise PermissionError(path)
 
-    install.unregister(Broken())
+    install.unregister(Broken(), startup_dir=tmp_path)
 
 
-def test_remove_data_deletes_the_whole_folder() -> None:
+def test_remove_data_deletes_the_whole_folder(tmp_path) -> None:
     (paths.app_dir() / "config.json").write_text("{}")
     folder = paths.app_dir()
-    install.unregister(FakeRegistry(), remove_data=True)
+    install.unregister(FakeRegistry(), startup_dir=tmp_path, remove_data=True)
     assert not folder.exists()
 
 
@@ -370,3 +372,51 @@ def test_app_camera_probe_has_the_stale_check_on(db) -> None:
     events = db.query("SELECT kind, detail FROM events")
     assert [r["kind"] for r in events] == ["camera_probe"]
     assert "Crashed.exe" in events[0]["detail"]
+
+
+# --- Stage 2 fixes ----------------------------------------------------------------
+
+
+def test_tick_subtracts_the_sample_time(db, calibration, clock) -> None:
+    """F3: App.tick returns the interval minus the time the sample took."""
+    from conftest import FakePose
+
+    rig, app = make_app(db, calibration, clock, sample_interval_s=2.0)
+
+    def slow_sample():
+        clock.advance(1.5)
+        return make_landmarks()
+
+    rig.monitor.pose = FakePose(slow_sample)
+    assert app.tick() == 0.5
+
+
+def test_tick_never_returns_a_negative_wait(db, calibration, clock) -> None:
+    from conftest import FakePose
+
+    rig, app = make_app(db, calibration, clock, sample_interval_s=2.0)
+
+    def very_slow_sample():
+        clock.advance(5.0)
+        return make_landmarks()
+
+    rig.monitor.pose = FakePose(very_slow_sample)
+    assert app.tick() == 0.0
+
+
+def test_state_reports_away_then_presence_check(db, calibration, clock) -> None:
+    """F1: App.state fills away and presence_check from the monitor."""
+    rig, app = make_app(db, calibration, clock)
+    rig.landmarks = None
+    app.tick()
+    assert app.state().away is True
+    assert app.state().presence_check is False
+    assert app.status() == ("green", "Posture Checker: away")
+    clock.advance(mon.PRESENCE_CHECK_AFTER_S + 1)
+    app.tick()
+    assert app.state().presence_check is True
+    rig.landmarks = {}
+    clock.advance(1)
+    app.tick()
+    assert app.state().away is False
+    assert app.status() == ("green", "Posture Checker: monitoring")
