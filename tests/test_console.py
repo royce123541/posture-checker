@@ -1,44 +1,71 @@
-"""Hiding the console window the background app gets at sign-in."""
+"""Leaving the console window the background app gets at sign-in."""
 
 from __future__ import annotations
 
-from posture_checker.platform.console import SW_HIDE, hide_own_console
+import os
+import sys
+
+from posture_checker.platform import console
+
+TERMINAL_PID = 999_999  # stands in for a shell that is not us or our launcher
 
 
 class FakeKernel32:
-    def __init__(self, window: int, processes: int) -> None:
+    def __init__(self, window: int, pids: list[int], fail: bool = False) -> None:
         self.window = window
-        self.processes = processes
+        self.pids = pids
+        self.fail = fail
 
     def GetConsoleWindow(self) -> int:
         return self.window
 
-    def GetConsoleProcessList(self, pids, size) -> int:
-        return self.processes
+    def GetConsoleProcessList(self, buffer, size) -> int:
+        if self.fail:
+            return 0
+        for i, pid in enumerate(self.pids[:size]):
+            buffer[i] = pid
+        return len(self.pids)
 
 
-class FakeUser32:
+class FakeSpawn:
     def __init__(self) -> None:
-        self.shown: list[tuple[int, int]] = []
+        self.calls: list[tuple[list[str], dict]] = []
 
-    def ShowWindow(self, window, command) -> int:
-        self.shown.append((window, command))
-        return 1
-
-
-def test_hides_a_console_only_this_process_uses() -> None:
-    user32 = FakeUser32()
-    assert hide_own_console(FakeKernel32(window=42, processes=1), user32)
-    assert user32.shown == [(42, SW_HIDE)]
+    def __call__(self, cmd, **kwargs):
+        self.calls.append((cmd, kwargs))
 
 
-def test_leaves_a_terminal_alone() -> None:
-    user32 = FakeUser32()
-    assert not hide_own_console(FakeKernel32(window=42, processes=2), user32)
-    assert user32.shown == []
+def run(kernel32: FakeKernel32) -> FakeSpawn:
+    spawn = FakeSpawn()
+    started = console.relaunch_without_console(["app"], kernel32, spawn)
+    assert started == bool(spawn.calls)
+    return spawn
 
 
-def test_nothing_to_do_without_a_console() -> None:
-    user32 = FakeUser32()
-    assert not hide_own_console(FakeKernel32(window=0, processes=0), user32)
-    assert user32.shown == []
+def test_relaunches_windowless_when_only_we_use_the_console() -> None:
+    [(cmd, kwargs)] = run(FakeKernel32(42, [os.getpid()])).calls
+    assert cmd == [sys.executable, "-m", "posture_checker", "app"]
+    assert kwargs["creationflags"] & console.CREATE_NO_WINDOW
+
+
+def test_relaunched_copy_never_relaunches_again(monkeypatch) -> None:
+    [(_, kwargs)] = run(FakeKernel32(42, [os.getpid()])).calls
+    assert kwargs["env"][console.RELAUNCHED_ENV] == "1"
+    monkeypatch.setenv(console.RELAUNCHED_ENV, "1")
+    assert not run(FakeKernel32(42, [os.getpid()])).calls
+
+
+def test_relaunches_when_only_our_launcher_shares_the_console() -> None:
+    assert run(FakeKernel32(42, [os.getpid(), os.getppid()])).calls
+
+
+def test_started_from_a_terminal_runs_in_place() -> None:
+    assert not run(FakeKernel32(42, [os.getpid(), os.getppid(), TERMINAL_PID])).calls
+
+
+def test_no_console_runs_in_place() -> None:
+    assert not run(FakeKernel32(0, [])).calls
+
+
+def test_failed_process_list_runs_in_place() -> None:
+    assert not run(FakeKernel32(42, [os.getpid()], fail=True)).calls
