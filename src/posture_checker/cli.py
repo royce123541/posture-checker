@@ -11,7 +11,8 @@ import sys
 import threading
 import time
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
 
 from posture_checker import paths
 from posture_checker.config import Config, load_config, save_config
@@ -409,6 +410,28 @@ def cmd_config(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_report(args: argparse.Namespace) -> int:
+    """Write the HTML report (Stage 3, behaviour 8); nothing is opened or sent."""
+    from posture_checker.report import write_report
+    from posture_checker.storage.db import Database
+
+    out = args.out if args.out is not None else paths.app_dir() / "report.html"
+    db = Database()
+    try:
+        path = write_report(db, out, day=args.week)
+    finally:
+        db.close()
+    print(f"Report written: {path}")
+    return 0
+
+
+def _iso_date(text: str) -> date:
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected YYYY-MM-DD, got {text!r}") from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="posture-checker", description=__doc__)
     parser.add_argument(
@@ -471,6 +494,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("mark-wrong", help="mark the latest alert as wrong").set_defaults(
         func=cmd_mark_wrong
     )
+
+    report = sub.add_parser("report", help="write the HTML report of the last 7 days")
+    report.add_argument("--out", type=Path, help="where to write it (default: data folder)")
+    report.add_argument(
+        "--week",
+        type=_iso_date,
+        metavar="YYYY-MM-DD",
+        help="last day of the 7-day period (default: today)",
+    )
+    report.set_defaults(func=cmd_report)
 
     config = sub.add_parser("config", help="show or change settings")
     config.add_argument("--window", dest="alert_window_s", type=float)
