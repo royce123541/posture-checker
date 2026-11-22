@@ -319,14 +319,20 @@ def claim_single_instance(
     return True
 
 
-def main() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
-    """Run the tray app until Quit (``hunch.exe`` and ``posture-checker app``)."""
+def main() -> int:
+    """Entry point for ``hunch.exe`` and ``posture-checker app``."""
     from posture_checker.platform.console import relaunch_without_console
 
     # A uv launcher (hunch.exe or pythonw.exe) may give the app its own console
-    # window at sign-in: start again without one (live check L4).
+    # window at sign-in: start again without one (live check L4). Nothing else
+    # runs first: the copy that exits must not touch the lock or the camera.
     if relaunch_without_console(["app"]):
         return 0
+    return run_app()
+
+
+def run_app() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
+    """Run the tray app until Quit."""
     from posture_checker.platform.single_instance import Win32MutexBackend
     from posture_checker.platform.windows import ToastNotifier
 

@@ -34,7 +34,9 @@ function Get-PostureCheckerProcess {
     if ($AppOnly) {
         $roots = @($roots | Where-Object { $_.CommandLine -match "\sapp\s*$" })
     }
-    # hunch.exe takes no arguments and only ever runs the app.
+    # hunch.exe takes no arguments and only ever runs the app. Matching its exact
+    # full path inside THIS checkout's .venv is safe: no other program has that
+    # path, and another checkout's hunch.exe lives under a different folder.
     $roots += @($all | Where-Object {
         $_.ExecutablePath -and $_.ExecutablePath.ToLowerInvariant() -eq $hunch
     })

@@ -10,7 +10,7 @@ No admin rights are needed.
 
 from __future__ import annotations
 
-import contextlib
+import logging
 import os
 import subprocess
 import sys
@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Protocol
 
 from posture_checker.platform.registry import Registry
+
+log = logging.getLogger(__name__)
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 #: The Run value written before the Startup shortcut replaced it.
@@ -28,7 +30,6 @@ SHORTCUT_NAME = "Hunch.lnk"
 OLD_SHORTCUT_NAME = "Posture Checker.lnk"
 #: uv builds this from [project.gui-scripts] in pyproject.toml.
 LAUNCHER_NAME = "hunch.exe"
-APP_ARGUMENTS = "-m posture_checker app"
 #: Repository root: three folders above src/posture_checker/platform/. This
 #: assumes a source checkout run from the repo's .venv, which is how
 #: install.ps1 installs the app; a wheel install would need another folder.
@@ -118,14 +119,20 @@ def launcher_executable() -> Path:
     return Path(sys.executable).with_name(LAUNCHER_NAME)
 
 
-def autostart_command() -> str:
-    return f'"{pythonw_executable()}" {APP_ARGUMENTS}'
-
-
 def _remove_old_entries(registry: Registry, startup_dir: Path) -> None:
-    (startup_dir / OLD_SHORTCUT_NAME).unlink(missing_ok=True)
-    with contextlib.suppress(FileNotFoundError):
+    """Best effort: each old entry is removed on its own, so one failure never
+    blocks the other or the new shortcut."""
+    old = startup_dir / OLD_SHORTCUT_NAME
+    try:
+        old.unlink(missing_ok=True)
+    except OSError as error:
+        log.warning("could not remove the old shortcut %s: %r", old, error)
+    try:
         registry.delete_value(RUN_KEY, RUN_VALUE)
+    except FileNotFoundError:
+        pass  # never written, or already removed
+    except OSError as error:
+        log.warning("could not remove the old Run value %s: %r", RUN_VALUE, error)
 
 
 def enable_autostart(registry: Registry, *, writer: ShortcutWriter, startup_dir: Path) -> None:

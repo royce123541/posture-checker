@@ -422,14 +422,45 @@ def test_state_reports_away_then_presence_check(db, calibration, clock) -> None:
     assert app.status() == ("green", "Hunch: monitoring")
 
 
-def test_app_main_relaunches_before_anything_else(monkeypatch) -> None:
-    """Rename R2: hunch.exe calls app.main directly, so main itself leaves an owned console."""
+def test_app_main_relaunches_first_and_then_exits(monkeypatch) -> None:
+    """Rename R2: hunch.exe calls app.main directly. The relaunch check runs before
+    anything else, and the copy that relaunched never starts the app."""
+    from posture_checker import app as app_mod
+    from posture_checker.platform import console, single_instance, windows
+
+    order: list[str] = []
+
+    def relaunch(args):
+        order.append(f"relaunch {args}")
+        return True
+
+    def must_not_run(*args, **kwargs):
+        order.append("app started")
+        raise AssertionError("the app must not start")
+
+    monkeypatch.setattr(console, "relaunch_without_console", relaunch)
+    monkeypatch.setattr(single_instance, "Win32MutexBackend", must_not_run)
+    monkeypatch.setattr(windows, "ToastNotifier", must_not_run)
+    monkeypatch.setattr(app_mod, "run_app", must_not_run)
+    assert app_mod.main() == 0
+    assert order == ["relaunch ['app']"]
+
+
+def test_app_main_starts_the_app_when_no_relaunch_is_needed(monkeypatch) -> None:
     from posture_checker import app as app_mod
     from posture_checker.platform import console
 
-    calls = []
-    monkeypatch.setattr(
-        console, "relaunch_without_console", lambda args: calls.append(args) or True
-    )
-    assert app_mod.main() == 0
-    assert calls == [["app"]]
+    order: list[str] = []
+
+    def no_relaunch(args):
+        order.append("relaunch")
+        return False
+
+    def run_app():
+        order.append("run_app")
+        return 7
+
+    monkeypatch.setattr(console, "relaunch_without_console", no_relaunch)
+    monkeypatch.setattr(app_mod, "run_app", run_app)
+    assert app_mod.main() == 7
+    assert order == ["relaunch", "run_app"]

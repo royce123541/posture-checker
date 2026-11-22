@@ -44,7 +44,7 @@ def test_powershell_is_resolved_from_system_root(monkeypatch) -> None:
     assert autostart.powershell_executable() == expected
 
 
-def test_enable_creates_a_missing_startup_folder(tmp_path) -> None:
+def test_enable_creates_a_missing_startup_folder(tmp_path, hunch_exe) -> None:
     startup = tmp_path / "does" / "not" / "exist"
     autostart.enable_autostart(FakeRegistry(), writer=FakeShortcutWriter(), startup_dir=startup)
     assert autostart.is_autostart_enabled(startup_dir=startup)
@@ -134,7 +134,9 @@ def test_real_writer_round_trip(tmp_path) -> None:
     folder = tmp_path / "Start Up folder"
     folder.mkdir()
     link = folder / autostart.SHORTCUT_NAME
-    target = autostart.launcher_executable()  # hunch.exe, built by uv sync
+    target = tmp_path / "fake launcher" / "hunch.exe"  # a dummy; never run
+    target.parent.mkdir()
+    target.write_bytes(b"")
     REAL_WRITER().create(link, target, "", autostart.REPO_ROOT, True)
     assert link.exists()
     script = (
@@ -159,3 +161,41 @@ def test_real_writer_round_trip(tmp_path) -> None:
     assert out[1] == ""
     assert Path(out[2]).resolve() == autostart.REPO_ROOT
     assert out[3] == str(autostart.WINDOW_STYLE_MINIMISED)
+
+
+class FailingRunValueRegistry(FakeRegistry):
+    def delete_value(self, path, name):
+        raise PermissionError(name)
+
+
+def test_locked_old_shortcut_does_not_block_run_value_or_enable(
+    tmp_path, hunch_exe, monkeypatch, caplog
+) -> None:
+    startup = tmp_path / "Startup"
+    startup.mkdir()
+    old = startup / autostart.OLD_SHORTCUT_NAME
+    old.write_text("")
+    registry = FakeRegistry()
+    registry.set_value(autostart.RUN_KEY, autostart.RUN_VALUE, "old")
+    real_unlink = Path.unlink
+
+    def locked_unlink(self, missing_ok=False):
+        if self.name == autostart.OLD_SHORTCUT_NAME:
+            raise PermissionError("in use")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", locked_unlink)
+    autostart.enable_autostart(registry, writer=FakeShortcutWriter(), startup_dir=startup)
+    assert autostart.is_autostart_enabled(startup_dir=startup)
+    assert autostart.RUN_VALUE not in registry.run_values()
+    assert old.exists()
+    assert "old shortcut" in caplog.text
+
+
+def test_run_value_failure_does_not_block_old_shortcut_removal(tmp_path, caplog) -> None:
+    startup = tmp_path / "Startup"
+    startup.mkdir()
+    (startup / autostart.OLD_SHORTCUT_NAME).write_text("")
+    autostart.disable_autostart(FailingRunValueRegistry(), startup_dir=startup)
+    assert list(startup.iterdir()) == []
+    assert "old Run value" in caplog.text

@@ -1,4 +1,4 @@
-"""Live check L1: can another app use the webcam while Posture Checker uses it?
+"""Live check L1: can another app use the webcam while Hunch uses it?
 
 Usage (needs the webcam, the Windows Camera app and a Meet or Zoom preview):
 
