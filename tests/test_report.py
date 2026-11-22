@@ -217,3 +217,41 @@ def test_window_start_is_open_and_end_is_closed(db: Database) -> None:
     html = report.generate_report(db, day=DAY, now=ts(16), tz=TZ)
     assert value(html, "day", "alerts_total") == "1"
     assert "1 alerts and 0 samples before recording started" in html
+
+
+def test_a_sample_at_the_window_start_is_excluded_and_at_its_end_included(db: Database) -> None:
+    metric(db, ts(10))  # (09:00, 10:00]
+    for hour, label in ((9.0, "slouch"), (10.0, "good")):
+        db.insert_sample(ts=ts(hour), state="present", confidence=0.9, label=label)
+    html = report.generate_report(db, day=DAY, now=ts(16), tz=TZ)
+    assert value(html, "day", "good_share") == "1"
+    assert "0 alerts and 1 samples before recording started" in html
+
+
+def test_low_confidence_samples_count_as_at_the_desk(db: Database) -> None:
+    metric(db, ts(10), 60.0, n_present=0, n_low_confidence=3, n_away=1)
+    html = report.generate_report(db, day=DAY, now=ts(16), tz=TZ)
+    assert float(value(html, "day", "at_desk_s") or "nan") == pytest.approx(45.0)
+    assert float(value(html, "day", "away_s") or "nan") == pytest.approx(15.0)
+
+
+def test_null_sample_counts_do_not_crash(db: Database) -> None:
+    import sqlite3
+
+    # The schema refuses NULL counts outright...
+    with pytest.raises(sqlite3.IntegrityError):
+        db.insert_metrics({"ts": ts(10), "interval_s": 60.0, "paused_reasons": ""})
+
+    # ...and the report still treats a NULL from an older file as zero.
+    class Reader:
+        def query(self, sql: str, params: tuple[object, ...] = ()) -> list[object]:
+            if sql.lstrip().startswith("SELECT ts, interval_s"):
+                return [{
+                    "ts": ts(10), "interval_s": 60.0, "cpu_percent": None, "rss_mb": None,
+                    "battery_percent": None, "on_ac": None, "paused_reasons": "",
+                    "n_present": None, "n_low_confidence": None, "n_away": None,
+                }]  # fmt: skip
+            return db.query(sql, params)
+
+    st = report._period_stats(Reader(), ts(0), ts(24))  # type: ignore[arg-type]
+    assert (st.at_desk_s, st.away_s) == (0.0, 0.0)

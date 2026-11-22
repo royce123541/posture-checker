@@ -34,10 +34,11 @@ current one.
 - Tray menu: pause / resume, mark the latest alert wrong, "I'm slouching now"
   (stored as a label for later training), calibrate, settings, open report,
   open data folder.
-- "Open report" writes `report.html` in the data folder (today plus the last
-  7 days: time at the desk, away and paused, posture share, alerts,
-  false-alert rate, CPU, memory and battery; only time Hunch recorded counts) and opens it in your browser. The page is a single local file with
-  no network access. Hunch records one row of health numbers a minute for it.
+- "Open report" writes `report.html` in the data folder and opens it in your browser.
+  It covers today and the last 7 days: time at the desk, away and paused, posture
+  share, alerts, false-alert rate, CPU, memory and battery. Only time Hunch recorded
+  counts. The page is a single local file with no network access. Hunch records one
+  row of health numbers a minute for it.
 
 ## Install (Stage 2)
 

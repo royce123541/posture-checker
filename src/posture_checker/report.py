@@ -115,6 +115,13 @@ def _add_drain(st: Stats, rows: Sequence[Any]) -> None:
         h.drain_h += (ts1 - ts0) / 3600.0
 
 
+#: Slack in seconds for the coverage bounds. ``ts - interval_s`` is a float
+#: subtraction, so a moment exactly at a window start can come out a few ulps
+#: inside it; 1 microsecond is far above that error and far below the time
+#: between two samples (at least 1 s).
+COVER_EPS_S = 1e-6
+
+
 def _covered(alias: str) -> str:
     """SQL condition: ``alias.ts`` lies in (ts - interval_s, ts] of some metrics row.
 
@@ -123,9 +130,9 @@ def _covered(alias: str) -> str:
     """
     return (
         "EXISTS (SELECT 1 FROM metrics m"
-        f" WHERE m.ts >= {alias}.ts"
+        f" WHERE m.ts >= {alias}.ts - {COVER_EPS_S}"
         f" AND m.ts < {alias}.ts + (SELECT MAX(interval_s) FROM metrics)"
-        f" AND m.ts - m.interval_s < {alias}.ts)"
+        f" AND m.ts - m.interval_s < {alias}.ts - {COVER_EPS_S})"
     )
 
 
@@ -148,6 +155,9 @@ def _period_stats(db: Reader, start: float, end: float, *, health: bool = True) 
             for reason in reasons.split(","):
                 pause[reason] += row["interval_s"]
         else:
+            # A row's time goes to the day of its ts (the window end), so a row
+            # just after midnight moves at most one interval across the
+            # boundary. Accepted rather than clipped: rows are a minute long.
             # Coverage spec C3: the row's time splits by its sample states;
             # low confidence still means someone was at the desk. A row with
             # none of these samples adds nothing to either.
