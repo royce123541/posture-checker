@@ -241,7 +241,7 @@ def test_gate_rejects_a_worse_candidate(calibration, capsys, monkeypatch) -> Non
     capsys.readouterr()
 
     # Sabotage fitting: the candidate keeps a slouch threshold far too low.
-    def bad_fit(train, current):
+    def bad_fit(train, current, keep=()):
         return Thresholds(slouch_face_drop=0.05), []
 
     monkeypatch.setattr(fr, "fit_thresholds", bad_fit)
@@ -259,3 +259,53 @@ def test_missing_shoulder_rules_are_nan_safe() -> None:
     dev = deviations(_rel(make_landmarks(shoulder_visibility=0.1)))
     assert math.isnan(dev["forward_vs_shoulders_excess"])
     assert not math.isnan(dev["forward_face_only_excess"])
+
+
+def test_kept_thresholds_are_not_fitted(recorded) -> None:
+    db, _ = recorded
+    train, _ = fr.time_blocked_split(db.recorded_samples())
+    current = Thresholds(forward_vs_shoulders_excess=0.2)
+    fitted, report = fr.fit_thresholds(train, current, keep={"forward_vs_shoulders_excess"})
+    assert fitted.forward_vs_shoulders_excess == 0.2
+    assert fitted.slouch_face_drop != current.slouch_face_drop  # others still fitted
+    kept = {f.name: f for f in report}["forward_vs_shoulders_excess"]
+    assert not kept.fitted and kept.note == "kept by request"
+    with pytest.raises(ValueError):
+        fr.fit_thresholds(train, current, keep={"no_such_threshold"})
+
+
+def test_fit_rules_on_chosen_sessions(calibration, capsys) -> None:
+    db = Database()
+    db.insert_calibration(calibration)
+    first = record(db, db.latest_calibration(), seed=1)
+    second = record(db, db.latest_calibration(), seed=2)
+    record(db, db.latest_calibration(), seed=3)  # newest, not chosen
+    db.close()
+
+    assert main(["fit-rules", "--session", first, "--session", second]) == 0
+    out = capsys.readouterr().out
+    assert f"Sessions: {first}, {second}  (" in out
+
+    assert main(["fit-rules", "--session", "nope"]) == 1
+    assert "Unknown recording session(s): nope" in capsys.readouterr().err
+
+
+def test_fit_rules_keep_option_leaves_threshold_alone(calibration, capsys) -> None:
+    db = Database()
+    db.insert_calibration(calibration)
+    record(db, db.latest_calibration())
+    db.close()
+    assert main(["fit-rules", "--keep", "forward_vs_shoulders_excess", "--deploy"]) == 0
+    assert "kept by request" in capsys.readouterr().out
+    deployed = load_active()
+    assert (
+        deployed.thresholds.forward_vs_shoulders_excess == Thresholds().forward_vs_shoulders_excess
+    )
+    assert deployed.thresholds.slouch_face_drop != Thresholds().slouch_face_drop
+
+
+def test_fit_rules_rejects_unknown_keep_and_all_with_session() -> None:
+    with pytest.raises(SystemExit):
+        main(["fit-rules", "--keep", "bogus"])
+    with pytest.raises(SystemExit):
+        main(["fit-rules", "--all", "--session", "x"])
