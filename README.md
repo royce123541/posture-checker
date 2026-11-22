@@ -152,9 +152,10 @@ Settings persist with `posture-checker config --window 90 --sensitivity 1.2`.
   leaves the page (observed in live check L2b).
 - In `burst` camera mode the camera is opened for every sample, so samples
   are at most as frequent as the camera can open. The interval is counted from
-  one sample's start to the next; see `docs/results/burst-timing.md` for the
-  measured timings (not measured yet until the owner runs
-  `scripts/bench_burst.py`).
+  one sample's start to the next. On the development laptop, opening the camera
+  and reading a frame took about 1.3 s per sample and samples still started
+  every 2 s (`docs/results/burst-timing.md`, measured by
+  `scripts/bench_burst.py`); a slower camera would make sampling slower.
 - Windows only.
 
 ## Development
