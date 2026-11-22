@@ -1,0 +1,115 @@
+from __future__ import annotations
+
+from collections.abc import Callable, Iterator
+
+import numpy as np
+import pytest
+
+from posture_checker import features as feat
+from posture_checker import paths
+from posture_checker.calibration import Calibration, build_calibration
+from posture_checker.capture.pose import PoseResult
+from posture_checker.storage.db import Database
+from posture_checker.synthetic import make_landmarks
+
+
+@pytest.fixture(autouse=True)
+def isolated_home(tmp_path, monkeypatch) -> None:
+    """Never let a test touch the real app data folder."""
+    monkeypatch.setenv(paths.HOME_ENV, str(tmp_path / "home"))
+
+
+@pytest.fixture
+def db() -> Iterator[Database]:
+    database = Database(":memory:")
+    yield database
+    database.close()
+
+
+@pytest.fixture
+def baseline() -> dict[str, float]:
+    return feat.raw_features(make_landmarks())
+
+
+@pytest.fixture
+def calibration() -> Calibration:
+    rng = np.random.default_rng(1)
+    raws = [feat.raw_features(make_landmarks(noise=0.001, rng=rng)) for _ in range(20)]
+    return build_calibration(raws, [0.95] * 20, ts=0.0)
+
+
+class FakeClock:
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class FakeCamera:
+    """A frame source that hands out blank frames and counts open/close calls."""
+
+    def __init__(self, brightness: int = 120, available: bool = True) -> None:
+        self.brightness = brightness
+        self.available = available
+        self.opened = 0
+        self.closed = 0
+        self.is_open = False
+
+    def open(self) -> bool:
+        if not self.available:
+            return False
+        self.opened += 1
+        self.is_open = True
+        return True
+
+    def read(self) -> np.ndarray | None:
+        if not self.is_open:
+            return None
+        # A gradient gives the frame realistic contrast.
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        frame += (
+            np.linspace(self.brightness - 60, self.brightness + 60, 640, dtype=np.float32)
+            .clip(0, 255)
+            .astype(np.uint8)[None, :, None]
+        )
+        return frame
+
+    def close(self) -> None:
+        self.closed += 1
+        self.is_open = False
+
+
+class FakePose:
+    """A pose backend that returns whatever landmarks the test scripted."""
+
+    name = "fake-pose"
+
+    def __init__(self, provider: Callable[[], np.ndarray | None]) -> None:
+        self.provider = provider
+
+    def estimate(self, frame_bgr: np.ndarray) -> PoseResult:
+        return PoseResult(self.provider(), latency_ms=5.0)
+
+    def close(self) -> None:
+        pass
+
+
+class RecordingNotifier:
+    def __init__(self) -> None:
+        self.alerts: list[tuple[int, str]] = []
+        self.on_wrong: Callable[[], None] | None = None
+        self.on_pause: Callable[[], None] | None = None
+
+    def alert(self, alert_id, label, on_wrong, on_pause) -> None:
+        self.alerts.append((alert_id, label))
+        self.on_wrong = on_wrong
+        self.on_pause = on_pause
+
+
+@pytest.fixture
+def clock() -> FakeClock:
+    return FakeClock()

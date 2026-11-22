@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local runtime data never belongs in the repo. The app keeps its database,
+# models and config under %LOCALAPPDATA%\PostureChecker, but guard anyway.
+*.db
+*.db-wal
+*.db-shm
+*.task
+*.onnx
+mlruns/
+mlflow.db
+data/
+
+# Images and video must never be committed (privacy rule of the project).
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.mp4
+*.avi
+!docs/**/*.png
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db

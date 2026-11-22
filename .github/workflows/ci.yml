@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    # The app is Windows-only (toasts, autostart, camera handling), so CI runs
+    # on Windows too. No webcam is needed: tests replay synthetic landmarks.
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history, so the ownership check can see every commit since main.
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies (locked)
+        run: uv sync --locked
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type-check
+        run: uv run mypy
+
+      - name: Test
+        run: uv run pytest --cov=posture_checker --cov-report=term-missing
+
+      - name: Check file ownership (specs and acceptance tests)
+        run: uv run python scripts/check_ownership.py
+
+      - name: Build wheel
+        run: uv build
+
+      - name: Smoke-test the built wheel
+        shell: pwsh
+        run: |
+          uv venv smoke-env
+          $wheel = (Get-ChildItem dist\*.whl).FullName
+          uv pip install --python smoke-env\Scripts\python.exe $wheel
+          smoke-env\Scripts\posture-checker.exe config
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: posture-checker-wheel
+          path: dist/*.whl
+          if-no-files-found: error
