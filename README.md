@@ -141,6 +141,10 @@ Settings persist with `posture-checker config --window 90 --sensitivity 1.2`.
   After a Meet call ends, the "meeting ended" page keeps the meeting title, so
   monitoring resumes when that tab is closed, or about a minute later when Meet
   leaves the page (observed in live check L2b).
+- In `burst` camera mode a sample is taken about every 5 s rather than every
+  2 s, because the camera is opened for each one.
+- The tray shows "monitoring" while nobody is at the desk.
+- Task Manager's Startup apps lists the app as "pythonw".
 - Windows only.
 
 ## Development
