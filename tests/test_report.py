@@ -20,8 +20,10 @@ def ts(hour: float, offset_days: int = 0) -> float:
 
 
 def metric(db: Database, when: float, interval: float = 3600.0, **kw: object) -> None:
-    db.insert_metrics({"ts": when, "interval_s": interval, "paused_reasons": "", **kw} | {
-        "n_present": 0, "n_low_confidence": 0, "n_away": 0,
+    db.insert_metrics({
+        "ts": when, "interval_s": interval, "paused_reasons": "",
+        "n_present": 0 if kw.get("paused_reasons") else 20, "n_low_confidence": 0, "n_away": 0,
+        **kw,
     })  # fmt: skip
 
 
@@ -51,6 +53,7 @@ def test_short_drain_shows_raw_values(db: Database) -> None:
 
 
 def test_other_days_get_their_own_scope_for_the_picker(db: Database) -> None:
+    metric(db, ts(10.5, -2))  # covers the alert below
     db.insert_alert(
         ts=ts(10, -2), label="slouch", bad_fraction=0.9, window_s=60, model_version="m",
         calibration_id=None,
@@ -156,7 +159,7 @@ def test_report_reads_through_a_read_only_connection(tmp_path, monkeypatch) -> N
 
     monkeypatch.setattr(db, "query", shared)
     html = report.generate_report(db, day=DAY, now=ts(16), tz=TZ)
-    assert value(html, "day", "monitored_s") == "3600"
+    assert value(html, "day", "at_desk_s") == "3600"
     with db.read_only() as reader, pytest.raises(Exception, match="readonly"):
         reader.query("DELETE FROM metrics")
     db.close()
@@ -173,7 +176,7 @@ def test_dst_days_run_midnight_to_midnight(db: Database, day: date, hours: int) 
     metric(db, end - 1, 3600.0)  # 23:59:59 local: still this day
     metric(db, end, 3600.0)  # next midnight: the next day
     html = report.generate_report(db, day=day, now=end + 3600, tz=london)
-    assert value(html, "day", "monitored_s") == "3600"
+    assert value(html, "day", "at_desk_s") == "3600"
 
 
 def test_open_report_failure_shows_a_message(db, calibration, clock) -> None:  # type: ignore[no-untyped-def]
@@ -191,3 +194,26 @@ def test_open_report_failure_shows_a_message(db, calibration, clock) -> None:  #
     )  # fmt: skip
     app.open_report()
     assert rig.notifier.messages == [app_mod.REPORT_ERROR]
+
+
+def test_a_row_after_midnight_covers_the_previous_evening(db: Database) -> None:
+    metric(db, ts(0.5, 1))  # window (23:30 on the 12th, 00:30 on the 13th]
+    db.insert_alert(
+        ts=ts(23.75), label="slouch", bad_fraction=0.9, window_s=60, model_version="m",
+        calibration_id=None,
+    )  # fmt: skip
+    html = report.generate_report(db, day=DAY, now=ts(23.9), tz=TZ)
+    assert value(html, "day", "alerts_total") == "1"
+    assert "not counted" not in html
+
+
+def test_window_start_is_open_and_end_is_closed(db: Database) -> None:
+    metric(db, ts(10))  # (09:00, 10:00]
+    for hour in (9.0, 10.0):
+        db.insert_alert(
+            ts=ts(hour), label="slouch", bad_fraction=0.9, window_s=60, model_version="m",
+            calibration_id=None,
+        )  # fmt: skip
+    html = report.generate_report(db, day=DAY, now=ts(16), tz=TZ)
+    assert value(html, "day", "alerts_total") == "1"
+    assert "1 alerts and 0 samples before recording started" in html

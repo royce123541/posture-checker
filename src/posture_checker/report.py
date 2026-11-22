@@ -73,7 +73,11 @@ class Health:
 @dataclass
 class Stats:
     has_metrics: bool = False
-    monitored_s: float = 0.0
+    at_desk_s: float = 0.0
+    away_s: float = 0.0
+    paused_s: float = 0.0
+    excluded_alerts: int = 0
+    excluded_samples: int = 0
     n_present: int = 0
     n_good: int = 0
     alerts_total: int = 0
@@ -111,11 +115,26 @@ def _add_drain(st: Stats, rows: Sequence[Any]) -> None:
         h.drain_h += (ts1 - ts0) / 3600.0
 
 
+def _covered(alias: str) -> str:
+    """SQL condition: ``alias.ts`` lies in (ts - interval_s, ts] of some metrics row.
+
+    The upper bound on ``m.ts`` (the longest interval stored) keeps each check
+    to a short range scan of idx_metrics_ts instead of every later row.
+    """
+    return (
+        "EXISTS (SELECT 1 FROM metrics m"
+        f" WHERE m.ts >= {alias}.ts"
+        f" AND m.ts < {alias}.ts + (SELECT MAX(interval_s) FROM metrics)"
+        f" AND m.ts - m.interval_s < {alias}.ts)"
+    )
+
+
 def _period_stats(db: Reader, start: float, end: float, *, health: bool = True) -> Stats:
     """Every figure for [start, end) in epoch seconds."""
     st = Stats(health={m: Health() for m in MODES})
     rows = db.query(
-        "SELECT ts, interval_s, cpu_percent, rss_mb, battery_percent, on_ac, paused_reasons"
+        "SELECT ts, interval_s, cpu_percent, rss_mb, battery_percent, on_ac, paused_reasons,"
+        " n_present, n_low_confidence, n_away"
         " FROM metrics WHERE ts >= ? AND ts < ? ORDER BY ts, id",
         (start, end),
     )
@@ -125,10 +144,19 @@ def _period_stats(db: Reader, start: float, end: float, *, health: bool = True) 
         reasons = row["paused_reasons"] or ""
         mode = "paused" if reasons else "monitoring"
         if reasons:
+            st.paused_s += row["interval_s"]
             for reason in reasons.split(","):
                 pause[reason] += row["interval_s"]
         else:
-            st.monitored_s += row["interval_s"]
+            # Coverage spec C3: the row's time splits by its sample states;
+            # low confidence still means someone was at the desk. A row with
+            # none of these samples adds nothing to either.
+            desk = (row["n_present"] or 0) + (row["n_low_confidence"] or 0)
+            total = desk + (row["n_away"] or 0)
+            if total:
+                at_desk = row["interval_s"] * desk / total
+                st.at_desk_s += at_desk
+                st.away_s += row["interval_s"] - at_desk
         if health:
             h = st.health[mode]
             if row["cpu_percent"] is not None:
@@ -140,23 +168,32 @@ def _period_stats(db: Reader, start: float, end: float, *, health: bool = True) 
     st.pause_s = dict(pause)
 
     (counts,) = db.query(
-        "SELECT COUNT(*) AS n, COALESCE(SUM(label = 'good'), 0) AS good FROM samples"
-        " WHERE ts >= ? AND ts < ? AND state = 'present'",
+        "SELECT COUNT(*) AS n, COALESCE(SUM(label = 'good'), 0) AS good FROM samples s"
+        f" WHERE ts >= ? AND ts < ? AND state = 'present' AND {_covered('s')}",
         (start, end),
     )
     st.n_present, st.n_good = int(counts["n"]), int(counts["good"])
+    (excluded,) = db.query(
+        "SELECT (SELECT COUNT(*) FROM alerts a WHERE a.ts >= ? AND a.ts < ?"
+        f" AND NOT {_covered('a')}) AS alerts,"
+        " (SELECT COUNT(*) FROM samples s WHERE s.ts >= ? AND s.ts < ?"
+        f" AND NOT {_covered('s')}) AS samples",
+        (start, end, start, end),
+    )
+    st.excluded_alerts, st.excluded_samples = int(excluded["alerts"]), int(excluded["samples"])
 
     for row in db.query(
         "SELECT label, COUNT(*) AS n, COALESCE(SUM(feedback = 'wrong'), 0) AS wrong"
-        " FROM alerts WHERE ts >= ? AND ts < ? GROUP BY label ORDER BY label",
+        f" FROM alerts a WHERE ts >= ? AND ts < ? AND {_covered('a')}"
+        " GROUP BY label ORDER BY label",
         (start, end),
     ):
         st.alerts_by_label[row["label"]] = int(row["n"])
         st.alerts_total += int(row["n"])
         st.alerts_wrong += int(row["wrong"])
     for row in db.query(
-        "SELECT label, COUNT(*) AS n FROM labels WHERE ts >= ? AND ts < ?"
-        " GROUP BY label ORDER BY label",
+        "SELECT label, COUNT(*) AS n FROM labels lb WHERE ts >= ? AND ts < ?"
+        f" AND {_covered('lb')} GROUP BY label ORDER BY label",
         (start, end),
     ):
         st.labels[row["label"]] = int(row["n"])
@@ -168,15 +205,16 @@ def _period_stats(db: Reader, start: float, end: float, *, health: bool = True) 
         h.latency = [
             r[0]
             for r in db.query(
-                "SELECT latency_ms FROM samples WHERE ts >= ? AND ts < ?"
-                " AND latency_ms IS NOT NULL",
+                "SELECT latency_ms FROM samples s WHERE ts >= ? AND ts < ?"
+                f" AND latency_ms IS NOT NULL AND {_covered('s')}",
                 (start, end),
             )
         ]
         h.confidence = [
             r[0]
             for r in db.query(
-                "SELECT confidence FROM samples WHERE ts >= ? AND ts < ? AND state = 'present'",
+                "SELECT confidence FROM samples s WHERE ts >= ? AND ts < ?"
+                f" AND state = 'present' AND {_covered('s')}",
                 (start, end),
             )
         ]
@@ -216,17 +254,25 @@ def _pct(fraction: float) -> str:
 
 
 def _summary_rows(scope: str, st: Stats) -> list[str]:
-    hours = st.monitored_s / 3600.0
+    hours = st.at_desk_s / 3600.0
     out: list[str] = []
-    if st.has_metrics:
-        out.append(
-            _row(
-                "Time monitored",
-                _figure(scope, "monitored_s", _fmt_duration(st.monitored_s), st.monitored_s),
-            )
+    for key, title, seconds in (
+        ("at_desk_s", "Time at the desk", st.at_desk_s),
+        ("away_s", "Time away", st.away_s),
+        ("paused_s", "Time paused", st.paused_s),
+    ):
+        cell = (
+            _figure(scope, key, _fmt_duration(seconds), seconds)
+            if st.has_metrics
+            else _no(scope, key)
         )
-    else:
-        out.append(_row("Time monitored", _no(scope, "monitored_s")))
+        out.append(_row(title, cell))
+    if st.excluded_alerts or st.excluded_samples:
+        text = (
+            f"{st.excluded_alerts} alerts and {st.excluded_samples} samples before recording"
+            " started or during gaps are not counted."
+        )
+        out.append(f'<tr><td colspan="2" class="note">{_no(scope, "excluded", text)}</td></tr>')
 
     if st.n_present:
         share = st.n_good / st.n_present
@@ -247,7 +293,7 @@ def _summary_rows(scope: str, st: Stats) -> list[str]:
         rate = st.alerts_total / hours
         text = f"{rate:.2f} per hour"
         if hours < MIN_HOURS_FOR_RATE or st.alerts_total < MIN_ALERTS_FOR_RATE:
-            text += f" ({st.alerts_total} alerts in {_fmt_duration(st.monitored_s)})"
+            text += f" ({st.alerts_total} alerts in {_fmt_duration(st.at_desk_s)} at the desk)"
         out.append(_row("Alerts per monitored hour", _figure(scope, "alerts_per_hour", text, rate)))
     else:
         out.append(_row("Alerts per monitored hour", _no(scope, "alerts_per_hour")))
@@ -460,7 +506,7 @@ def generate_report(
     false_rate: list[float | None] = []
     for st in per_day:
         share.append(st.n_good / st.n_present if st.n_present else None)
-        hours = st.monitored_s / 3600.0
+        hours = st.at_desk_s / 3600.0
         per_hour.append(st.alerts_total / hours if hours > 0 else None)
         false_rate.append(st.alerts_wrong / st.alerts_total if st.alerts_total else None)
 
