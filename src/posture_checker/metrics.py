@@ -17,7 +17,14 @@ from typing import Any, Protocol
 import numpy as np
 
 from posture_checker.config import Config
-from posture_checker.monitor import AWAY, LOW_CONFIDENCE, PRESENT, STORED_STATES, Sample
+from posture_checker.monitor import (
+    AWAY,
+    LOW_CONFIDENCE,
+    PAUSED,
+    PRESENT,
+    STORED_STATES,
+    Sample,
+)
 from posture_checker.policy.pausing import BatteryStatus
 from posture_checker.storage.db import Database
 
@@ -26,11 +33,9 @@ log = logging.getLogger(__name__)
 #: Prune the metrics table this often while running (spec Stage 3, behaviour 6:
 #: once a day, plus at start-up).
 PRUNE_EVERY_S = 24 * 3600.0
-#: If more windows than this elapsed between two polls, the process was not
-#: running in between (laptop asleep or hibernated: the monitor polls at least
-#: every 30 s otherwise). Those windows get no rows, so suspended time never
-#: counts as monitored time and a wake-up does not write a burst of empty rows.
-MAX_CATCH_UP_WINDOWS = 2
+#: Pieces of a window shorter than this (seconds) are float noise, not time
+#: monitored or paused, and get no row.
+MIN_SPAN_S = 1e-6
 
 
 class SystemProbe(Protocol):
@@ -81,6 +86,8 @@ class _Seen:
     state: str
     confidence: float
     latency_ms: float | None
+    #: Pause reasons when the sample was taken; () while running.
+    reasons: tuple[str, ...] = ()
 
 
 def _none() -> None:
@@ -116,6 +123,10 @@ class MetricsRecorder:
         self._last_prune = self._window_start
         self._seen: list[_Seen] = []
         self._failed: set[str] = set()
+        #: Pause reasons of the last sample of the previous window (None: unknown).
+        self._prev_reasons: tuple[str, ...] | None = None
+        #: The next CPU reading spans a gap with no samples; store NULL instead.
+        self._cpu_stale = False
 
     @property
     def interval_s(self) -> float:
@@ -142,24 +153,30 @@ class MetricsRecorder:
             return 0
 
     def observe(self, sample: Sample) -> None:
-        self._seen.append(_Seen(sample.ts, sample.state, sample.confidence, sample.latency_ms))
+        reasons: tuple[str, ...] = ()
+        if sample.state == PAUSED:
+            # Read now, not at the window end, so a pause that starts or ends
+            # mid-minute is split correctly (an empty answer still means paused).
+            reasons = tuple(self._read("paused_reasons", self.paused_reasons) or ()) or (PAUSED,)
+        self._seen.append(
+            _Seen(sample.ts, sample.state, sample.confidence, sample.latency_ms, reasons)
+        )
 
     def poll(self) -> None:
         now = self.clock()
         interval = self.interval_s
-        end = self._window_start + interval
-        if now >= end:
-            self._write(self._window_start, end)
-            self._window_start = end
-            skipped = int((now - self._window_start) // interval)
-            if skipped > MAX_CATCH_UP_WINDOWS:
-                log.info("no metrics for %d windows (the app was not running)", skipped)
-                self._window_start += skipped * interval
-                self._seen = [s for s in self._seen if s.ts > self._window_start]
+        while now >= self._window_start + interval:
+            start, end = self._window_start, self._window_start + interval
+            if any(start < s.ts <= end for s in self._seen):
+                self._write(start, end)
             else:
-                while now >= self._window_start + interval:
-                    self._write(self._window_start, self._window_start + interval)
-                    self._window_start += interval
+                # The monitor samples at least every 30 s while the app runs, so
+                # a window without a single sample means the laptop was asleep:
+                # no row (suspended time is not monitored time), and the next
+                # CPU reading would average over the gap, so it is dropped.
+                self._cpu_stale = True
+                self._prev_reasons = None
+            self._window_start = end
         if now - self._last_prune >= PRUNE_EVERY_S:
             self.prune()
 
@@ -173,41 +190,98 @@ class MetricsRecorder:
                 log.warning("could not read %s for metrics; storing NULL", field, exc_info=True)
             return None
 
+    def _split(self, start: float, end: float, window: list[_Seen]) -> tuple[float, list[str]]:
+        """Seconds of (start, end] spent paused, and the reasons seen, in order.
+
+        Time between two samples takes the state of the earlier one; time
+        before the first sample takes the previous window's last state (or the
+        first sample's when unknown).
+        """
+        current = self._prev_reasons
+        if current is None:
+            if window:
+                current = window[0].reasons
+            else:
+                current = tuple(self._read("paused_reasons", self.paused_reasons) or ())
+        paused_s, t = 0.0, start
+        reasons: list[str] = []
+        for ts, next_reasons in [*((s.ts, s.reasons) for s in window), (end, None)]:
+            if current:
+                paused_s += ts - t
+                reasons += [r for r in current if r not in reasons]
+            t = ts
+            if next_reasons is not None:
+                current = next_reasons
+        self._prev_reasons = current
+        return paused_s, reasons
+
     def _write(self, start: float, end: float) -> None:
+        """Write the window as one row, or two when it was partly paused.
+
+        A mixed window gives a monitoring row (``paused_reasons`` empty) and a
+        paused row, each with the seconds it covered, so the report adds time
+        up correctly. Both carry the same CPU, memory and battery readings.
+        """
         began = self.timer()
         window = [s for s in self._seen if start < s.ts <= end]
         self._seen = [s for s in self._seen if s.ts > end]
+        paused_s, reasons = self._split(start, end, window)
         present = [s for s in window if s.state == PRESENT]
         latencies = [
             s.latency_ms for s in window if s.state in STORED_STATES and s.latency_ms is not None
         ]
+        cpu = self._read("cpu", self.probe.cpu_percent)
+        if self._cpu_stale:
+            cpu, self._cpu_stale = None, False
         battery: BatteryStatus | None = self._read("battery", self.probe.battery)
-        has_battery = battery is not None and battery.percent is not None
-        row: dict[str, Any] = {
+        percent = battery.percent if battery is not None else None
+        common: dict[str, Any] = {
             "ts": end,
-            "interval_s": end - start,
-            "cpu_percent": self._read("cpu", self.probe.cpu_percent),
+            "cpu_percent": cpu,
             "rss_mb": self._read("memory", self.probe.rss_mb),
-            "n_present": len(present),
-            "n_low_confidence": sum(s.state == LOW_CONFIDENCE for s in window),
-            "n_away": sum(s.state == AWAY for s in window),
-            # numpy's default (linear) percentile, as in the acceptance tests.
-            "latency_p50_ms": float(np.percentile(latencies, 50)) if latencies else None,
-            "latency_p95_ms": float(np.percentile(latencies, 95)) if latencies else None,
-            "mean_confidence": (
-                float(np.mean([s.confidence for s in present])) if present else None
-            ),
-            "battery_percent": battery.percent if battery is not None and has_battery else None,
-            "on_ac": (int(battery.plugged) if battery is not None and has_battery else None),
+            "battery_percent": percent,
+            "on_ac": None if battery is None or percent is None else int(battery.plugged),
             "camera_mode": self.config.camera_mode,
-            "paused_reasons": ",".join(self._read("paused_reasons", self.paused_reasons) or ()),
             "model_version": self._read("model_version", self.model_version),
             "calibration_id": self._read("calibration_id", self.calibration_id),
         }
-        try:
-            row_id = self.db.insert_metrics(row)
-            # Cost covers gathering plus the insert (behaviour 5), so it is known
-            # only afterwards and is filled in with a small update.
-            self.db.set_metrics_cost(row_id, (self.timer() - began) * 1000.0)
-        except Exception:
-            log.exception("could not write a metrics row")
+        rows: list[dict[str, Any]] = []
+        monitored_s = (end - start) - paused_s
+        if monitored_s > MIN_SPAN_S:
+            rows.append(
+                {
+                    **common,
+                    "interval_s": monitored_s,
+                    "paused_reasons": "",
+                    "n_present": len(present),
+                    "n_low_confidence": sum(s.state == LOW_CONFIDENCE for s in window),
+                    "n_away": sum(s.state == AWAY for s in window),
+                    # numpy's default (linear) percentile, as in the acceptance tests.
+                    "latency_p50_ms": float(np.percentile(latencies, 50)) if latencies else None,
+                    "latency_p95_ms": float(np.percentile(latencies, 95)) if latencies else None,
+                    "mean_confidence": (
+                        float(np.mean([s.confidence for s in present])) if present else None
+                    ),
+                }
+            )
+        if paused_s > MIN_SPAN_S:
+            rows.append(
+                {
+                    **common,
+                    "interval_s": paused_s,
+                    "paused_reasons": ",".join(reasons),
+                    "n_present": 0,
+                    "n_low_confidence": 0,
+                    "n_away": 0,
+                }
+            )
+        # metrics_cost_ms (behaviour 5) covers reading the probes and building
+        # the rows. The insert is not included, so the cost can go into the
+        # same INSERT instead of a second write.
+        cost_ms = (self.timer() - began) * 1000.0
+        for row in rows:
+            row["metrics_cost_ms"] = cost_ms
+            try:
+                self.db.insert_metrics(row)
+            except Exception:
+                log.exception("could not write a metrics row")

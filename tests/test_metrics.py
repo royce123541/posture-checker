@@ -58,23 +58,60 @@ def test_paused_samples_are_not_counted(db) -> None:
     assert row["latency_p50_ms"] is None and row["mean_confidence"] is None
 
 
+def tick(rec, clock, seconds: float, state: str = PRESENT) -> None:  # type: ignore[no-untyped-def]
+    clock.advance(seconds)
+    rec.observe(Sample(ts=clock.now, state=state, confidence=0.9, latency_ms=4.0))
+    rec.poll()
+
+
 def test_a_long_gap_writes_no_rows_for_suspended_time(db) -> None:
     clock = FakeClock(0.0)
     rec = recorder(db, clock)
+    tick(rec, clock, 30)
     clock.advance(10 * 3600)  # laptop asleep
     rec.poll()
-    assert len(rows(db)) == 1  # only the window that had started before the gap
-    clock.advance(60)
-    rec.poll()
-    assert [r["interval_s"] for r in rows(db)] == [60, 60]
+    assert len(rows(db)) == 1  # only the window that had a sample
+    tick(rec, clock, 30)
+    tick(rec, clock, 30)
+    assert sum(r["interval_s"] for r in rows(db)) == pytest.approx(60 + 60)
 
 
-def test_a_short_catch_up_writes_each_window(db) -> None:
+def test_cpu_after_a_gap_is_null_then_normal(db) -> None:
     clock = FakeClock(0.0)
     rec = recorder(db, clock)
-    clock.advance(180)
+    tick(rec, clock, 30)
+    clock.advance(3600)
     rec.poll()
+    for _ in range(4):
+        tick(rec, clock, 30)
+    cpus = [r["cpu_percent"] for r in rows(db)]
+    assert cpus[0] == 3.0 and cpus[1] is None and cpus[-1] == 3.0
+
+
+def test_each_window_with_samples_gets_a_row(db) -> None:
+    clock = FakeClock(0.0)
+    rec = recorder(db, clock)
+    for _ in range(6):
+        tick(rec, clock, 30)
     assert [r["ts"] for r in rows(db)] == [60, 120, 180]
+
+
+def test_a_pause_starting_mid_minute_is_split(db) -> None:
+    clock = FakeClock(0.0)
+    reasons: list[str] = []
+    rec = recorder(db, clock, paused_reasons=lambda: tuple(reasons))
+    tick(rec, clock, 20)  # running at 20 s
+    reasons.append("in_call:meet")
+    tick(rec, clock, 20, PAUSED)  # paused from 40 s: 20..40 counts as running
+    tick(rec, clock, 20, PAUSED)
+    reasons.clear()  # read per sample, not at the window end
+    out = rows(db)
+    assert [(r["paused_reasons"], r["interval_s"]) for r in out] == [
+        ("", pytest.approx(40)),
+        ("in_call:meet", pytest.approx(20)),
+    ]
+    assert out[0]["n_present"] == 1 and out[1]["n_present"] == 0
+    assert out[0]["metrics_cost_ms"] is not None
 
 
 def test_stop_twice_writes_one_partial_row(db) -> None:
@@ -130,8 +167,7 @@ def test_insert_failure_is_logged_not_raised(db, monkeypatch, caplog) -> None:
     monkeypatch.setattr(db, "insert_metrics", boom)
     clock = FakeClock(0.0)
     rec = recorder(db, clock)
-    clock.advance(60)
-    rec.poll()
+    tick(rec, clock, 60)
     assert "could not write a metrics row" in caplog.text
 
 

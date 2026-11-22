@@ -11,9 +11,10 @@ import json
 import math
 import sqlite3
 import threading
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from posture_checker import paths
 from posture_checker.calibration import Calibration
@@ -174,6 +175,18 @@ def _from_json(text: str) -> dict[str, float]:
     return {k: (math.nan if v is None else v) for k, v in json.loads(text).items()}
 
 
+class Reader(Protocol):
+    def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]: ...
+
+
+class _ConnReader:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
+        return self._conn.execute(sql, params).fetchall()
+
+
 class Database:
     """Thin wrapper over one SQLite file.
 
@@ -210,6 +223,25 @@ class Database:
     def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         with self._lock:
             return self._conn.execute(sql, params).fetchall()
+
+    @contextmanager
+    def read_only(self) -> Iterator[Reader]:
+        """A separate read-only connection for long reads (the report).
+
+        It does not take the shared lock, so the monitor's writes go on while
+        it reads (WAL mode). An in-memory database has no file to reopen, so it
+        falls back to the shared connection.
+        """
+        if self.path == ":memory:":
+            yield self
+            return
+        uri = Path(self.path).resolve().as_uri() + "?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield _ConnReader(conn)
+        finally:
+            conn.close()
 
     # --- calibrations -------------------------------------------------------
     def insert_calibration(self, calibration: Calibration) -> int:
@@ -347,9 +379,6 @@ class Database:
             f"INSERT INTO metrics({cols}) VALUES ({marks})",
             tuple(row.get(c) for c in METRICS_COLUMNS),
         )
-
-    def set_metrics_cost(self, row_id: int, cost_ms: float) -> None:
-        self._execute("UPDATE metrics SET metrics_cost_ms = ? WHERE id = ?", (cost_ms, row_id))
 
     def prune_metrics(
         self,
