@@ -32,7 +32,12 @@ current one.
   window's title and process name (titles are never stored, only the app name).
   The "Pause during calls" checkbox in Settings turns this off.
 - Tray menu: pause / resume, mark the latest alert wrong, "I'm slouching now"
-  (stored as a label for later training), calibrate, settings, open data folder.
+  (stored as a label for later training), calibrate, settings, open report,
+  open data folder.
+- "Open report" writes `report.html` in the data folder (today plus the last
+  7 days: posture share, alerts, false-alert rate, pauses, CPU, memory and
+  battery) and opens it in your browser. The page is a single local file with
+  no network access. Hunch records one row of health numbers a minute for it.
 
 ## Install (Stage 2)
 
@@ -76,6 +81,10 @@ Useful while testing: `uv run posture-checker run --window 20 --cooldown 30`
 alerts after 20 seconds instead of 60.
 
 Settings persist with `posture-checker config --window 90 --sensitivity 1.2`.
+
+Write the report without the tray: `uv run posture-checker report` (to
+`report.html` in the data folder), `--out PATH` to write it elsewhere, and
+`--week 2025-03-12` for the 7 days ending on that date.
 
 ## Architecture
 
