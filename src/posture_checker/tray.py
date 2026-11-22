@@ -130,16 +130,16 @@ def tray_status(state: TrayState) -> tuple[str, str]:
         text = "Paused: " + ", ".join(describe_reason(r) for r in state.paused_reasons)
         return GREY, text[:TOOLTIP_MAX]
     if not state.calibrated:
-        return AMBER, "Posture Checker: calibrate to start"
+        return AMBER, "Hunch: calibrate to start"
     if not state.camera_available:
-        return AMBER, "Posture Checker: camera unavailable"
+        return AMBER, "Hunch: camera unavailable"
     if state.away:
         if state.presence_check:
             # Read at call time so the tooltip never holds a second copy of the number.
             seconds = int(monitor.PRESENCE_CHECK_INTERVAL_S)
-            return GREEN, f"Posture Checker: away, checking every {seconds} s"
-        return GREEN, "Posture Checker: away"
-    return GREEN, "Posture Checker: monitoring"
+            return GREEN, f"Hunch: away, checking every {seconds} s"
+        return GREEN, "Hunch: away"
+    return GREEN, "Hunch: monitoring"
 
 
 def icon_image(colour: str) -> Any:

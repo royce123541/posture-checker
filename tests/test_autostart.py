@@ -50,10 +50,10 @@ def test_enable_creates_a_missing_startup_folder(tmp_path) -> None:
     assert autostart.is_autostart_enabled(startup_dir=startup)
 
 
-def test_enable_refuses_when_pythonw_is_missing(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr(autostart, "pythonw_executable", lambda: tmp_path / "pythonw.exe")
+def test_enable_refuses_when_hunch_exe_is_missing(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(autostart, "launcher_executable", lambda: tmp_path / "hunch.exe")
     writer = FakeShortcutWriter()
-    with pytest.raises(autostart.AutostartError, match=r"pythonw.exe not found"):
+    with pytest.raises(autostart.AutostartError, match=r"hunch\.exe not found"):
         autostart.enable_autostart(FakeRegistry(), writer=writer, startup_dir=tmp_path)
     assert writer.created == []
 
@@ -78,7 +78,7 @@ def test_real_writer_passes_values_as_environment(monkeypatch, tmp_path) -> None
         seen["env"] = kwargs["env"]
 
     monkeypatch.setattr(autostart.subprocess, "run", fake_run)
-    tricky = tmp_path / 'it\'s "odd"; $(x)' / "Posture Checker.lnk"
+    tricky = tmp_path / 'it\'s "odd"; $(x)' / "Hunch.lnk"
     REAL_WRITER().create(tricky, Path("py.exe"), "-m x", tmp_path, True)
     assert seen["command"][0] == str(autostart.powershell_executable())
     assert seen["command"][-1] == autostart._PS_SCRIPT
@@ -134,8 +134,8 @@ def test_real_writer_round_trip(tmp_path) -> None:
     folder = tmp_path / "Start Up folder"
     folder.mkdir()
     link = folder / autostart.SHORTCUT_NAME
-    target = autostart.pythonw_executable()
-    REAL_WRITER().create(link, target, "-m posture_checker app", autostart.REPO_ROOT, True)
+    target = autostart.launcher_executable()  # hunch.exe, built by uv sync
+    REAL_WRITER().create(link, target, "", autostart.REPO_ROOT, True)
     assert link.exists()
     script = (
         "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:PC_LNK_PATH); "
@@ -156,6 +156,6 @@ def test_real_writer_round_trip(tmp_path) -> None:
         timeout=autostart.WRITER_TIMEOUT_S,
     ).stdout.splitlines()
     assert Path(out[0]).resolve() == target.resolve()
-    assert out[1] == "-m posture_checker app"
+    assert out[1] == ""
     assert Path(out[2]).resolve() == autostart.REPO_ROOT
     assert out[3] == str(autostart.WINDOW_STYLE_MINIMISED)

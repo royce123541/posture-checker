@@ -170,7 +170,7 @@ def run_window(controller: SettingsController) -> int:  # pragma: no cover - nee
     from tkinter import ttk
 
     root = tk.Tk()
-    root.title("Posture Checker: settings")
+    root.title("Hunch: settings")
     root.resizable(False, False)
     frame = ttk.Frame(root, padding=16)
     frame.grid()

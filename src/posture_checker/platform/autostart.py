@@ -1,9 +1,11 @@
 """Start the app at sign-in through a shortcut in the user's Startup folder.
 
-Task Manager's Startup apps lists a Startup-folder shortcut by its file name,
-so it shows "Posture Checker" (spec Stage 2 fixes, F2). Earlier versions used
-the HKCU Run value ``PostureChecker``; enabling and disabling both remove it so
-an upgrade never starts the app twice. No admin rights are needed.
+Task Manager's Startup apps names a shortcut after the program it runs, so the
+shortcut runs ``hunch.exe``, uv's windowless launcher for the ``hunch`` GUI
+entry point (spec Stage 2 rename, R2). Earlier versions used the shortcut
+"Posture Checker.lnk" and before that the HKCU Run value ``PostureChecker``;
+enabling and disabling both remove them so an upgrade never starts the app twice.
+No admin rights are needed.
 """
 
 from __future__ import annotations
@@ -20,8 +22,12 @@ from posture_checker.platform.registry import Registry
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 #: The Run value written before the Startup shortcut replaced it.
 RUN_VALUE = "PostureChecker"
-#: The file name Task Manager shows (spec F2).
-SHORTCUT_NAME = "Posture Checker.lnk"
+#: The Startup shortcut's file name (spec Stage 2 rename, R1).
+SHORTCUT_NAME = "Hunch.lnk"
+#: The shortcut used before the rename (spec Stage 2 fixes, F2), removed on upgrade.
+OLD_SHORTCUT_NAME = "Posture Checker.lnk"
+#: uv builds this from [project.gui-scripts] in pyproject.toml.
+LAUNCHER_NAME = "hunch.exe"
 APP_ARGUMENTS = "-m posture_checker app"
 #: Repository root: three folders above src/posture_checker/platform/. This
 #: assumes a source checkout run from the repo's .venv, which is how
@@ -107,39 +113,45 @@ def pythonw_executable() -> Path:
     return Path(sys.executable).with_name("pythonw.exe")
 
 
+def launcher_executable() -> Path:
+    """``hunch.exe`` next to the running interpreter (read at call time)."""
+    return Path(sys.executable).with_name(LAUNCHER_NAME)
+
+
 def autostart_command() -> str:
     return f'"{pythonw_executable()}" {APP_ARGUMENTS}'
 
 
-def _remove_run_value(registry: Registry) -> None:
+def _remove_old_entries(registry: Registry, startup_dir: Path) -> None:
+    (startup_dir / OLD_SHORTCUT_NAME).unlink(missing_ok=True)
     with contextlib.suppress(FileNotFoundError):
         registry.delete_value(RUN_KEY, RUN_VALUE)
 
 
 def enable_autostart(registry: Registry, *, writer: ShortcutWriter, startup_dir: Path) -> None:
-    """Write (or overwrite) the one Startup shortcut and drop the old Run value.
+    """Write (or overwrite) the one Startup shortcut and drop the old entries.
 
-    Raises ``AutostartError`` if pythonw.exe is missing, so a shortcut that
-    could never start the app is not written.
+    Raises ``AutostartError`` if hunch.exe is missing (run ``uv sync``), so a
+    shortcut that could never start the app is not written.
     """
-    target = pythonw_executable()
+    target = launcher_executable()
     if not target.exists():
-        raise AutostartError(f"pythonw.exe not found at {target}")
+        raise AutostartError(f"{LAUNCHER_NAME} not found at {target}; run uv sync")
     startup_dir.mkdir(parents=True, exist_ok=True)
     writer.create(
         startup_dir / SHORTCUT_NAME,
         target,
-        APP_ARGUMENTS,
+        "",  # the entry point needs no arguments
         REPO_ROOT,
         True,
     )
-    _remove_run_value(registry)
+    _remove_old_entries(registry, startup_dir)
 
 
 def disable_autostart(registry: Registry, *, startup_dir: Path) -> None:
-    """Delete the shortcut and the old Run value; no error if either is gone."""
+    """Delete the shortcut and the old entries; no error if any is gone."""
     (startup_dir / SHORTCUT_NAME).unlink(missing_ok=True)
-    _remove_run_value(registry)
+    _remove_old_entries(registry, startup_dir)
 
 
 def is_autostart_enabled(*, startup_dir: Path) -> bool:

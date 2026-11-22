@@ -109,11 +109,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_app(_: argparse.Namespace) -> int:
-    from posture_checker.platform.console import relaunch_without_console
-
-    # Autostart's uv launcher gives the app its own console window: leave it.
-    if relaunch_without_console(["app"]):
-        return 0
+    # app.main leaves a console window it owns alone (live check L4).
     from posture_checker.app import main as app_main
 
     return app_main()

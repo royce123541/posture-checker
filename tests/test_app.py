@@ -31,7 +31,7 @@ def test_startup_with_calibration_shows_nothing_and_is_green(db, calibration, cl
     app.startup()
     assert rig.notifier.messages == []
     app.tick()
-    assert app.status() == ("green", "Posture Checker: monitoring")
+    assert app.status() == ("green", "Hunch: monitoring")
 
 
 def test_camera_unavailable_turns_tray_amber(db, calibration, clock) -> None:
@@ -181,7 +181,7 @@ def test_register_then_unregister_leaves_registry_and_startup_empty(tmp_path) ->
     startup = tmp_path / "Startup"
     install.register(registry, writer=FakeShortcutWriter(), startup_dir=startup)
     install.register(registry, writer=FakeShortcutWriter(), startup_dir=startup)
-    assert [p.name for p in startup.iterdir()] == ["Posture Checker.lnk"]
+    assert [p.name for p in startup.iterdir()] == ["Hunch.lnk"]
     install.unregister(registry, startup_dir=startup)
     assert list(startup.iterdir()) == []
     assert registry.run_values() == {}
@@ -411,7 +411,7 @@ def test_state_reports_away_then_presence_check(db, calibration, clock) -> None:
     app.tick()
     assert app.state().away is True
     assert app.state().presence_check is False
-    assert app.status() == ("green", "Posture Checker: away")
+    assert app.status() == ("green", "Hunch: away")
     clock.advance(mon.PRESENCE_CHECK_AFTER_S + 1)
     app.tick()
     assert app.state().presence_check is True
@@ -419,4 +419,17 @@ def test_state_reports_away_then_presence_check(db, calibration, clock) -> None:
     clock.advance(1)
     app.tick()
     assert app.state().away is False
-    assert app.status() == ("green", "Posture Checker: monitoring")
+    assert app.status() == ("green", "Hunch: monitoring")
+
+
+def test_app_main_relaunches_before_anything_else(monkeypatch) -> None:
+    """Rename R2: hunch.exe calls app.main directly, so main itself leaves an owned console."""
+    from posture_checker import app as app_mod
+    from posture_checker.platform import console
+
+    calls = []
+    monkeypatch.setattr(
+        console, "relaunch_without_console", lambda args: calls.append(args) or True
+    )
+    assert app_mod.main() == 0
+    assert calls == [["app"]]

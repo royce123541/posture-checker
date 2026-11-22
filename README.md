@@ -1,6 +1,6 @@
-# Posture Checker
+# Hunch
 
-A background posture checker for a Windows laptop, built around an on-device
+Hunch, a background posture checker for a Windows laptop, built around an on-device
 MLOps loop: user feedback becomes labeled data, models are versioned and
 retrained on a schedule, and a new model is deployed only if it beats the
 current one.
@@ -51,12 +51,14 @@ default is `burst`, because the camera sharing probe
 (`uv run python scripts/camera_share_probe.py`) showed that `hold` blocks other
 apps from the webcam; see `docs/results/camera-sharing.md`.
 
-Autostart is a shortcut named "Posture Checker" in your Startup folder
-(`shell:startup`), so Task Manager's Startup apps lists it as "Posture
-Checker". It runs `.venv\Scripts\pythonw.exe -m posture_checker app` from the
-repository folder, minimised. The installer and the "Start at login" box in
-Settings both create or delete it, and both remove the `PostureChecker` Run
-value older versions used.
+Autostart is a shortcut `Hunch.lnk` in your Startup folder (`shell:startup`).
+It runs `.venv\Scripts\hunch.exe`, a windowless launcher uv builds for the
+`hunch` GUI entry point, from the repository folder, minimised; Task Manager's
+Startup apps names it after that program ("hunch"). The installer and the
+"Start at login" box in Settings both create or delete it, and both remove the
+`Posture Checker.lnk` shortcut and `PostureChecker` Run value older versions
+used. The command, package and data folder keep the `posture-checker` /
+`PostureChecker` names.
 
 ## Terminal use (Stage 1)
 

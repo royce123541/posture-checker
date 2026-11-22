@@ -51,8 +51,8 @@ PAUSE_1_HOUR_S = 60 * 60
 ALERT_STATE_CACHE_S = 10.0
 
 CALIBRATE_PROMPT = "Calibrate to start: sit in your good posture for a few seconds."
-ERROR_TOAST = "Posture Checker hit an error and will retry in 30 seconds. Details are in the log."
-ALREADY_RUNNING = "Posture Checker is already running."
+ERROR_TOAST = "Hunch hit an error and will retry in 30 seconds. Details are in the log."
+ALREADY_RUNNING = "Hunch is already running."
 
 
 class AppNotifier(Protocol):
@@ -320,7 +320,13 @@ def claim_single_instance(
 
 
 def main() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
-    """Run the tray app until Quit."""
+    """Run the tray app until Quit (``hunch.exe`` and ``posture-checker app``)."""
+    from posture_checker.platform.console import relaunch_without_console
+
+    # A uv launcher (hunch.exe or pythonw.exe) may give the app its own console
+    # window at sign-in: start again without one (live check L4).
+    if relaunch_without_console(["app"]):
+        return 0
     from posture_checker.platform.single_instance import Win32MutexBackend
     from posture_checker.platform.windows import ToastNotifier
 
@@ -378,7 +384,7 @@ def main() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
     )
     icon = tray_mod.TrayIcon(app.state, app.tray_actions())
     worker = threading.Thread(target=app.run, args=(stop,), name="monitor", daemon=True)
-    log.info("Posture Checker starting (model %s)", monitor.model.version)
+    log.info("Hunch starting (model %s)", monitor.model.version)
     app.startup()
     worker.start()
     try:
@@ -388,5 +394,5 @@ def main() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
         worker.join(timeout=QUIT_JOIN_S)
         monitor.release_camera()
         db.close()
-        log.info("Posture Checker stopped")
+        log.info("Hunch stopped")
     return 0

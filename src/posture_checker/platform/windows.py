@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 from posture_checker.inference import FORWARD_HEAD, SLOUCH, TOO_CLOSE
 
-APP_DISPLAY_NAME = "Posture Checker"
+APP_DISPLAY_NAME = "Hunch"
 #: Application User Model ID: how Windows attributes our toasts to an app.
 AUMID = "PostureChecker.App"
 _AUMID_KEY = rf"Software\Classes\AppUserModelId\{AUMID}"
@@ -21,7 +21,7 @@ MESSAGES = {
 
 #: Windows NotificationSetting values (other than 0, "enabled") and what to tell the user.
 BLOCKED_REASONS = {
-    1: "notifications from Posture Checker are turned off in Settings > System > Notifications",
+    1: "notifications from Hunch are turned off in Settings > System > Notifications",
     2: "notifications are turned off for your Windows account (Settings > System > Notifications)",
     3: "notifications are disabled by a group policy on this PC",
     4: "Windows rejected the app's notification registration",

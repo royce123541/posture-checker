@@ -16,6 +16,11 @@ dependencies = [
 [project.scripts]
 posture-checker = "posture_checker.cli:main"
 
+# Windowless launcher .venv\Scripts\hunch.exe: the Startup shortcut runs it so
+# Task Manager names the app after it (spec Stage 2 rename, R2).
+[project.gui-scripts]
+hunch = "posture_checker.app:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8",
