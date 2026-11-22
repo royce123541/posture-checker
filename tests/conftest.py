@@ -20,6 +20,28 @@ def isolated_home(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv(paths.HOME_ENV, str(tmp_path / "home"))
 
 
+class _NoRealShortcutWriter:
+    """Stand-in for WScriptShortcutWriter under test: writes an empty file only."""
+
+    def create(self, path, target, arguments, working_dir, minimised) -> None:  # type: ignore[no-untyped-def]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
+
+
+@pytest.fixture(autouse=True)
+def isolated_startup(tmp_path, monkeypatch) -> None:
+    """No test may read or write the real Startup folder or run powershell.exe."""
+    from posture_checker import settings_ui
+    from posture_checker.platform import autostart
+
+    appdata = tmp_path / "AppData-Roaming"
+    monkeypatch.setenv("APPDATA", str(appdata))  # backstop for anything reading APPDATA
+    startup = tmp_path / "TestStartup"
+    for module in (autostart, settings_ui):
+        monkeypatch.setattr(module, "default_startup_dir", lambda: startup)
+        monkeypatch.setattr(module, "WScriptShortcutWriter", _NoRealShortcutWriter)
+
+
 @pytest.fixture
 def db() -> Iterator[Database]:
     database = Database(":memory:")

@@ -1,23 +1,61 @@
-"""Startup-folder autostart helpers (Stage 2 fixes, F2), without touching Windows."""
+"""Startup-folder autostart helpers (Stage 2 fixes, F2)."""
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
+import pytest
+
 from acceptance.conftest import FakeRegistry, FakeShortcutWriter
+from posture_checker import paths, settings_ui
+from posture_checker.config import Config, load_config, save_config
 from posture_checker.platform import autostart
+
+# Captured at import, before the autouse fixture in tests/conftest.py swaps them out.
+REAL_WRITER = autostart.WScriptShortcutWriter
+REAL_DEFAULT_STARTUP_DIR = autostart.default_startup_dir
+
+
+def test_tests_never_see_the_real_startup_folder(tmp_path) -> None:
+    """The autouse fixture redirects every default away from the real folder."""
+    real_appdata = Path.home() / "AppData" / "Roaming"
+    for module in (autostart, settings_ui):
+        folder = module.default_startup_dir()
+        assert folder.is_relative_to(tmp_path)
+        assert module.WScriptShortcutWriter is not REAL_WRITER
+    assert not Path(os.environ["APPDATA"]).is_relative_to(real_appdata)
+    controller = settings_ui.SettingsController(paths.config_path(), FakeRegistry())
+    assert controller.startup_dir.is_relative_to(tmp_path)
+    assert not isinstance(controller.writer, REAL_WRITER)
 
 
 def test_default_startup_dir_is_under_appdata(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("APPDATA", str(tmp_path))
     expected = tmp_path / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
-    assert autostart.default_startup_dir() == expected
+    assert REAL_DEFAULT_STARTUP_DIR() == expected
+
+
+def test_powershell_is_resolved_from_system_root(monkeypatch) -> None:
+    monkeypatch.setenv("SYSTEMROOT", r"C:\Win")
+    expected = Path(r"C:\Win") / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    assert autostart.powershell_executable() == expected
 
 
 def test_enable_creates_a_missing_startup_folder(tmp_path) -> None:
     startup = tmp_path / "does" / "not" / "exist"
     autostart.enable_autostart(FakeRegistry(), writer=FakeShortcutWriter(), startup_dir=startup)
     assert autostart.is_autostart_enabled(startup_dir=startup)
+
+
+def test_enable_refuses_when_pythonw_is_missing(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(autostart, "pythonw_executable", lambda: tmp_path / "pythonw.exe")
+    writer = FakeShortcutWriter()
+    with pytest.raises(autostart.AutostartError, match=r"pythonw.exe not found"):
+        autostart.enable_autostart(FakeRegistry(), writer=writer, startup_dir=tmp_path)
+    assert writer.created == []
 
 
 def test_repo_root_holds_the_project() -> None:
@@ -30,7 +68,6 @@ def test_powershell_script_takes_paths_from_the_environment_only() -> None:
     for name in ("PC_LNK_PATH", "PC_LNK_TARGET", "PC_LNK_ARGS", "PC_LNK_DIR", "PC_LNK_STYLE"):
         assert f"$env:{name}" in script
     assert "WScript.Shell" in script
-    assert str(Path.home()) not in script
 
 
 def test_real_writer_passes_values_as_environment(monkeypatch, tmp_path) -> None:
@@ -42,7 +79,83 @@ def test_real_writer_passes_values_as_environment(monkeypatch, tmp_path) -> None
 
     monkeypatch.setattr(autostart.subprocess, "run", fake_run)
     tricky = tmp_path / 'it\'s "odd"; $(x)' / "Posture Checker.lnk"
-    autostart.WScriptShortcutWriter().create(tricky, Path("py.exe"), "-m x", tmp_path, True)
+    REAL_WRITER().create(tricky, Path("py.exe"), "-m x", tmp_path, True)
+    assert seen["command"][0] == str(autostart.powershell_executable())
     assert seen["command"][-1] == autostart._PS_SCRIPT
     assert seen["env"]["PC_LNK_PATH"] == str(tricky)
     assert seen["env"]["PC_LNK_STYLE"] == str(autostart.WINDOW_STYLE_MINIMISED)
+
+
+class FailingWriter:
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+
+    def create(self, *args) -> None:
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        FileNotFoundError("powershell.exe"),
+        subprocess.CalledProcessError(1, "powershell", stderr=b"Access denied"),
+        subprocess.TimeoutExpired("powershell", 30),
+    ],
+)
+def test_settings_reports_writer_failure_and_saves_nothing(tmp_path, error) -> None:
+    save_config(Config())
+    startup = tmp_path / "Startup"
+    controller = settings_ui.SettingsController(
+        paths.config_path(), FakeRegistry(), writer=FailingWriter(error), startup_dir=startup
+    )
+    message = controller.save({"autostart": True, "cooldown_s": 42.0})
+    assert message is not None
+    assert message.startswith("Not saved: could not change the startup shortcut (")
+    if isinstance(error, subprocess.CalledProcessError):
+        assert "Access denied" in message
+    assert load_config().cooldown_s == Config().cooldown_s
+    assert not autostart.is_autostart_enabled(startup_dir=startup)
+
+
+def test_install_main_reports_writer_failure(monkeypatch, capsys) -> None:
+    from posture_checker import install
+    from posture_checker.platform import registry
+
+    monkeypatch.setattr(registry, "WinRegistry", FakeRegistry)
+    error = subprocess.CalledProcessError(1, "powershell", stderr=b"blocked by policy")
+    monkeypatch.setattr(autostart, "WScriptShortcutWriter", lambda: FailingWriter(error))
+    assert install.main(["register"]) == 1
+    assert "blocked by policy" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="needs WScript.Shell")
+def test_real_writer_round_trip(tmp_path) -> None:
+    """Writes a real .lnk (folder with a space) and reads it back through WScript.Shell."""
+    folder = tmp_path / "Start Up folder"
+    folder.mkdir()
+    link = folder / autostart.SHORTCUT_NAME
+    target = autostart.pythonw_executable()
+    REAL_WRITER().create(link, target, "-m posture_checker app", autostart.REPO_ROOT, True)
+    assert link.exists()
+    script = (
+        "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:PC_LNK_PATH); "
+        "$s.TargetPath; $s.Arguments; $s.WorkingDirectory; $s.WindowStyle"
+    )
+    out = subprocess.run(
+        [
+            str(autostart.powershell_executable()),
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ],
+        env={**os.environ, "PC_LNK_PATH": str(link)},
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=autostart.WRITER_TIMEOUT_S,
+    ).stdout.splitlines()
+    assert Path(out[0]).resolve() == target.resolve()
+    assert out[1] == "-m posture_checker app"
+    assert Path(out[2]).resolve() == autostart.REPO_ROOT
+    assert out[3] == str(autostart.WINDOW_STYLE_MINIMISED)
