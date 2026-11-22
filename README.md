@@ -5,9 +5,10 @@ MLOps loop: user feedback becomes labeled data, models are versioned and
 retrained on a schedule, and a new model is deployed only if it beats the
 current one.
 
-> **Status: Stage 1 of 6.** Detection, calibration and alerts work from a
-> terminal with a rule-based baseline model. The background tray app, summaries,
-> trained model, retraining loop and drift detection are the next stages. This
+> **Status: Stage 2 of 6 (live checks pending).** Detection, calibration and
+> alerts run as a background tray app that starts at login and pauses itself.
+> Summaries, the trained model, the retraining loop and drift detection are the
+> next stages. This
 > README grows with each stage; results tables are filled in only with numbers
 > that were actually measured.
 
@@ -23,8 +24,34 @@ current one.
   edge of the frame produce `low_confidence` samples, which never trigger alerts.
 - Stores measurements, alerts and "wrong alert" feedback in a local SQLite
   database, each row tagged with the model version and calibration that produced it.
+- Runs in the background with a tray icon (green monitoring, grey paused, amber
+  needs calibration or camera unavailable). It pauses and releases the webcam
+  while another app uses it, while the screen is locked and on low battery,
+  and samples only every 30 s after 5 minutes with nobody at the desk.
+- Pauses during Google Meet, Zoom and Teams calls, recognised from the meeting
+  window's title and process name (titles are never stored, only the app name).
+  The "Pause during calls" checkbox in Settings turns this off.
+- Tray menu: pause / resume, mark the latest alert wrong, "I'm slouching now"
+  (stored as a label for later training), calibrate, settings, open data folder.
 
-## Quick start (Stage 1)
+## Install (Stage 2)
+
+From the repository folder, in PowerShell (no admin rights needed):
+
+```powershell
+.\install.ps1                # uv sync, pose model, autostart at login, start the app
+.\install.ps1 -NoAutostart   # same, without starting at login
+.\uninstall.ps1              # stop the app, remove autostart; keeps your data
+.\uninstall.ps1 -RemoveData  # also delete %LOCALAPPDATA%\PostureChecker
+```
+
+The app logs to `%LOCALAPPDATA%\PostureChecker\posture-checker.log` (rotating,
+at most 3 x 1 MB). `camera_mode` (`hold` or `burst`) is in Settings; the
+default is `burst`, because the camera sharing probe
+(`uv run python scripts/camera_share_probe.py`) showed that `hold` blocks other
+apps from the webcam; see `docs/results/camera-sharing.md`.
+
+## Terminal use (Stage 1)
 
 Requires Windows 10/11 and [uv](https://docs.astral.sh/uv/).
 
@@ -40,7 +67,6 @@ Useful while testing: `uv run posture-checker run --window 20 --cooldown 30`
 alerts after 20 seconds instead of 60.
 
 Settings persist with `posture-checker config --window 90 --sensitivity 1.2`.
-The one-command installer with autostart arrives in Stage 2.
 
 ## Architecture
 
@@ -110,6 +136,15 @@ The one-command installer with autostart arrives in Stage 2.
   frame, head-to-shoulder distance), so results depend on a good calibration.
 - `rules-v0` thresholds are geometric starting points, not tuned values.
 - The webcam light stays on while monitoring.
+- Call detection is a title heuristic: Meet counts only when the meeting is the
+  active tab, Firefox is not covered, and app updates can change the titles.
+  After a Meet call ends, the "meeting ended" page keeps the meeting title, so
+  monitoring resumes when that tab is closed, or about a minute later when Meet
+  leaves the page (observed in live check L2b).
+- In `burst` camera mode a sample is taken about every 5 s rather than every
+  2 s, because the camera is opened for each one.
+- The tray shows "monitoring" while nobody is at the desk.
+- Task Manager's Startup apps lists the app as "pythonw".
 - Windows only.
 
 ## Development

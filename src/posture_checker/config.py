@@ -8,6 +8,8 @@ from pathlib import Path
 
 from posture_checker import paths
 
+CAMERA_MODES = ("hold", "burst")
+
 
 @dataclass
 class Config:
@@ -37,10 +39,21 @@ class Config:
     camera_index: int = 0
     frame_width: int = 640
     frame_height: int = 480
+    #: "hold" keeps the camera open between samples (Stage 1 behaviour);
+    #: "burst" opens it, reads one frame and closes it for every sample, so other
+    #: apps can always take it. Default "burst": live check L1
+    #: (docs/results/camera-sharing.md) showed that while "hold" has the webcam
+    #: open, neither the Windows Camera app nor a Meet preview gets a picture.
+    camera_mode: str = "burst"
 
     # --- Power --------------------------------------------------------------
     #: Pause monitoring below this battery percentage when unplugged.
     battery_pause_percent: int = 20
+
+    # --- Calls --------------------------------------------------------------
+    #: Pause while a Meet, Zoom or Teams meeting window is open (stage 2 call
+    #: detection, C8). On by default; off is the way out of a wrong heuristic.
+    pause_in_calls: bool = True
 
     def validate(self) -> None:
         if self.sample_interval_s <= 0 or self.suspect_interval_s <= 0:
@@ -53,6 +66,14 @@ class Config:
             raise ValueError("sensitivity must be between 0.25 and 4.0")
         if not 0.0 <= self.min_confidence <= 1.0:
             raise ValueError("min_confidence must be between 0 and 1")
+        if self.cooldown_s < 0:
+            raise ValueError("cooldown_s must not be negative")
+        if not 0 <= self.battery_pause_percent <= 100:
+            raise ValueError("battery_pause_percent must be between 0 and 100")
+        if not isinstance(self.pause_in_calls, bool):
+            raise ValueError("pause_in_calls must be true or false")
+        if self.camera_mode not in CAMERA_MODES:
+            raise ValueError(f"camera_mode must be one of {', '.join(CAMERA_MODES)}")
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -70,4 +91,8 @@ def load_config(path: Path | None = None) -> Config:
 def save_config(config: Config, path: Path | None = None) -> None:
     config.validate()
     path = path or paths.config_path()
-    path.write_text(json.dumps(asdict(config), indent=2), encoding="utf-8")
+    # Write a temporary file and swap it in, so the running app's config
+    # watcher never reads a half-written file.
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(asdict(config), indent=2), encoding="utf-8")
+    tmp.replace(path)
