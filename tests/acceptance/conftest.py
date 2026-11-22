@@ -33,6 +33,32 @@ class FakeCameraUsage:
         return list(self.apps)
 
 
+class FakeWindowLister:
+    """Window lister returning whatever the test sets; counts calls.
+
+    Set ``error`` to make ``windows()`` raise. ``add(title, process)`` builds
+    WindowInfo lazily so a missing module fails the test, not collection.
+    """
+
+    def __init__(self) -> None:
+        self.items: list[tuple[str, str]] = []
+        self.calls = 0
+        self.error: Exception | None = None
+
+    def add(self, title: str, process: str) -> None:
+        self.items.append((title, process))
+
+    def clear(self) -> None:
+        self.items = []
+
+    def windows(self) -> list[Any]:
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        info = import_module("posture_checker.platform.windows_list").WindowInfo
+        return [info(title=t, process=p) for t, p in self.items]
+
+
 class FakeLockState:
     def __init__(self) -> None:
         self.locked = False
@@ -162,7 +188,7 @@ class FakeMutexBackend:
 class Rig:
     """A Stage 2 monitor wired to fakes, with the pose controlled by the test."""
 
-    def __init__(self, db, calibration, clock: FakeClock, **config) -> None:
+    def __init__(self, db, calibration, clock: FakeClock, *, calls: Any = None, **config) -> None:
         pausing = import_module("posture_checker.policy.pausing")
         mon = import_module("posture_checker.monitor")
         self.clock = clock
@@ -176,12 +202,16 @@ class Rig:
         if calibration is not None:
             db.insert_calibration(calibration)
         self.config = Config(**{"alert_window_s": 60, "cooldown_s": 300, **config})
+        extra: dict[str, Any] = {}
+        if calls is not None:
+            extra = {"calls": calls, "pause_in_calls": self.config.pause_in_calls}
         self.supervisor = pausing.PauseSupervisor(
             camera_usage=self.usage,
             lock_state=self.lock,
             battery=self.battery,
             clock=clock,
             battery_pause_percent=self.config.battery_pause_percent,
+            **extra,
         )
         self.monitor = mon.Monitor(
             config=self.config,
@@ -210,6 +240,22 @@ class Rig:
 def make_rig(db, calibration, clock):
     def factory(**config) -> Rig:
         return Rig(db, calibration, clock, **config)
+
+    return factory
+
+
+@pytest.fixture
+def lister() -> FakeWindowLister:
+    return FakeWindowLister()
+
+
+@pytest.fixture
+def make_call_rig(db, calibration, clock, lister):
+    """Rig whose supervisor has a ``calls`` probe (a CallDetector on ``lister``)."""
+
+    def factory(**config) -> Rig:
+        detector = import_module("posture_checker.policy.calls").CallDetector(lister)
+        return Rig(db, calibration, clock, calls=detector, **config)
 
     return factory
 
