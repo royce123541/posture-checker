@@ -1,4 +1,6 @@
-Status: draft
+Status: approved
+
+Approved by the owner on 2026-11-22 with the recommended answer to both decisions.
 
 # Stage 3 addition: count only recorded time, split desk and away
 
