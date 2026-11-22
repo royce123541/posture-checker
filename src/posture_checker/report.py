@@ -10,6 +10,7 @@ data) ``data-value``, so tests read the numbers without scraping prose.
 from __future__ import annotations
 
 import html
+import itertools
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -20,7 +21,7 @@ from typing import Any
 
 import numpy as np
 
-from posture_checker.storage.db import Database
+from posture_checker.storage.db import Database, Reader
 
 NO_DATA = "not measured yet"
 #: Rates over less monitored time than this show their raw counts beside them
@@ -35,6 +36,11 @@ DRAIN_GAP_FACTOR = 1.5
 #: Days in the weekly view (spec Stage 3, decision 6).
 WEEK_DAYS = 7
 MODES = ("monitoring", "paused")
+#: Shown under pause times: a minute with two reasons counts under both.
+PAUSE_NOTE = (
+    "A minute paused for several reasons counts under each, so these can add up"
+    " to more than the time paused."
+)
 
 
 # --- time helpers ------------------------------------------------------------------
@@ -78,7 +84,34 @@ class Stats:
     health: dict[str, Health] = field(default_factory=dict)
 
 
-def _period_stats(db: Database, start: float, end: float, *, health: bool = True) -> Stats:
+def _add_drain(st: Stats, rows: Sequence[Any]) -> None:
+    """Battery drain from consecutive on-battery minutes (behaviour 12).
+
+    A partly paused minute is stored as two rows with the same ``ts``; they are
+    one battery reading, so rows are grouped by ``ts`` first. A pair counts
+    only when both readings are on battery, the gap is no longer than
+    DRAIN_GAP_FACTOR x the later minute's length, and the charge did not rise.
+    The pair goes to the mode that covered most of the later minute.
+    """
+    groups: dict[float, list[Any]] = {}
+    for row in rows:
+        g = groups.setdefault(row["ts"], [0.0, 0.0, row["battery_percent"], row["on_ac"]])
+        g[0] += row["interval_s"]
+        if not row["paused_reasons"]:
+            g[1] += row["interval_s"]
+    readings = sorted(groups.items())
+    for (ts0, g0), (ts1, g1) in itertools.pairwise(readings):
+        if g0[3] != 0 or g1[3] != 0 or g0[2] is None or g1[2] is None:
+            continue
+        drop = g0[2] - g1[2]
+        if drop < 0 or ts1 - ts0 > g1[0] * DRAIN_GAP_FACTOR:
+            continue
+        h = st.health["monitoring" if g1[1] * 2 >= g1[0] else "paused"]
+        h.drain_pct += drop
+        h.drain_h += (ts1 - ts0) / 3600.0
+
+
+def _period_stats(db: Reader, start: float, end: float, *, health: bool = True) -> Stats:
     """Every figure for [start, end) in epoch seconds."""
     st = Stats(health={m: Health() for m in MODES})
     rows = db.query(
@@ -88,7 +121,6 @@ def _period_stats(db: Database, start: float, end: float, *, health: bool = True
     )
     st.has_metrics = bool(rows)
     pause: dict[str, float] = defaultdict(float)
-    prev: Any = None
     for row in rows:
         reasons = row["paused_reasons"] or ""
         mode = "paused" if reasons else "monitoring"
@@ -103,17 +135,8 @@ def _period_stats(db: Database, start: float, end: float, *, health: bool = True
                 h.cpu.append(row["cpu_percent"])
             if row["rss_mb"] is not None:
                 h.rss.append(row["rss_mb"])
-            if (
-                prev is not None
-                and prev["on_ac"] == 0
-                and row["on_ac"] == 0
-                and prev["battery_percent"] is not None
-                and row["battery_percent"] is not None
-                and row["ts"] - prev["ts"] <= row["interval_s"] * DRAIN_GAP_FACTOR
-            ):
-                h.drain_pct += prev["battery_percent"] - row["battery_percent"]
-                h.drain_h += (row["ts"] - prev["ts"]) / 3600.0
-        prev = row
+    if health:
+        _add_drain(st, rows)
     st.pause_s = dict(pause)
 
     (counts,) = db.query(
@@ -247,6 +270,7 @@ def _summary_rows(scope: str, st: Stats) -> list[str]:
             for reason, seconds in sorted(st.pause_s.items())
         )
         out.append(f"<tr><th>Pause time by reason</th><td>{cells}</td></tr>")
+        out.append(f'<tr><td colspan="2" class="note">{PAUSE_NOTE}</td></tr>')
     else:
         out.append(_row("Pause time by reason", "no data"))
     return out
@@ -314,13 +338,26 @@ def _health_rows(scope: str, st: Stats) -> list[str]:
 
 # --- charts -----------------------------------------------------------------------------
 
-#: Chart geometry in SVG user units (pixels at 100% zoom).
-CHART_W, CHART_H, BAR_W, GAP, TOP, BOTTOM = 360, 140, 40, 10, 16, 20
+# Chart geometry in SVG user units (pixels at 100% zoom), chosen so 7 bars fit:
+#: Chart width: 7 x (bar + gap) + one gap = 360.
+CHART_W = 360
+#: Chart height, room for the bars plus value and weekday labels.
+CHART_H = 140
+#: Width of one day's bar.
+BAR_W = 40
+#: Space between bars.
+GAP = 10
+#: Space above the bars for the value label.
+TOP = 16
+#: Space below the bars for the weekday label.
+BOTTOM = 20
+#: Floor for the alerts-per-hour scale so a week of zeros does not divide by zero.
+MIN_SCALE = 1e-9
 
 
 def _chart(name: str, title: str, days: list[date], values: list[float | None], unit: str) -> str:
     known = [v for v in values if v is not None]
-    scale = max([*known, 1e-9]) if name == "alerts_per_hour" else 1.0
+    scale = max([*known, MIN_SCALE]) if name == "alerts_per_hour" else 1.0
     plot_h = CHART_H - TOP - BOTTOM
     parts = [
         f'<svg data-chart="{name}" width="{CHART_W}"'
@@ -360,7 +397,7 @@ nav a{margin-right:.8em}
 """
 
 
-def _lineage(db: Database, start: float, end: float, tz: tzinfo | None) -> tuple[str, str]:
+def _lineage(db: Reader, start: float, end: float, tz: tzinfo | None) -> tuple[str, str]:
     versions: set[str] = set()
     cal_ids: set[int] = set()
     for table in ("samples", "alerts", "metrics"):
@@ -412,8 +449,11 @@ def generate_report(
     bounds = [_midnight(d, tz) for d in [*days, day + timedelta(days=1)]]
     week_start, week_end = bounds[0], bounds[-1]
 
-    week = _period_stats(db, week_start, week_end)
-    per_day = [_period_stats(db, bounds[i], bounds[i + 1]) for i in range(WEEK_DAYS)]
+    # A separate read-only connection, so the monitor's writes are not held up.
+    with db.read_only() as reader:
+        week = _period_stats(reader, week_start, week_end)
+        per_day = [_period_stats(reader, bounds[i], bounds[i + 1]) for i in range(WEEK_DAYS)]
+        versions, cal_ids = _lineage(reader, week_start, week_end, tz)
 
     share: list[float | None] = []
     per_hour: list[float | None] = []
@@ -424,7 +464,6 @@ def generate_report(
         per_hour.append(st.alerts_total / hours if hours > 0 else None)
         false_rate.append(st.alerts_wrong / st.alerts_total if st.alerts_total else None)
 
-    versions, cal_ids = _lineage(db, week_start, week_end, tz)
     p = "page"
     nav = " ".join(
         f'<a href="#d{d.isoformat()}">{d.strftime("%a %d %b")}</a>' for d in reversed(days)

@@ -54,6 +54,7 @@ ALERT_STATE_CACHE_S = 10.0
 
 CALIBRATE_PROMPT = "Calibrate to start: sit in your good posture for a few seconds."
 ERROR_TOAST = "Hunch hit an error and will retry in 30 seconds. Details are in the log."
+REPORT_ERROR = "Hunch could not open the report. Details are in the log."
 ALREADY_RUNNING = "Hunch is already running."
 
 
@@ -285,8 +286,13 @@ class App:
         """Write today's report into the data folder and open it (Stage 3, behaviour 8)."""
         from posture_checker.report import write_report
 
-        path = write_report(self.db, paths.app_dir() / REPORT_FILE, now=self.clock())
-        self.report_opener(path)
+        try:
+            path = write_report(self.db, paths.app_dir() / REPORT_FILE, now=self.clock())
+            self.report_opener(path)
+        except Exception:
+            # Runs on the tray thread: say so instead of failing silently there.
+            log.exception("could not write or open the report")
+            self.notifier.message(REPORT_ERROR)
 
     def quit(self) -> None:
         if self.on_quit is not None:

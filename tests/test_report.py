@@ -90,3 +90,104 @@ def test_write_report_replaces_the_file(db: Database, tmp_path) -> None:
 def test_cli_rejects_a_bad_week_date() -> None:
     with pytest.raises(SystemExit):
         cli.main(["report", "--week", "12/03/2025"])
+
+
+def drain(html: str) -> float | None:
+    v = value(html, "day", "drain_pct_per_h:monitoring")
+    return None if v is None else float(v)
+
+
+def test_drain_ignores_a_rise_and_any_pair_touching_ac(db: Database) -> None:
+    metric(db, ts(8), battery_percent=80, on_ac=0)
+    metric(db, ts(9), battery_percent=85, on_ac=0)  # rose: ignored
+    metric(db, ts(10), battery_percent=80, on_ac=0)  # 5 %/h
+    metric(db, ts(11), battery_percent=70, on_ac=1)  # AC on the later side: ignored
+    metric(db, ts(12), battery_percent=60, on_ac=0)  # AC on the earlier side: ignored
+    html = report.generate_report(db, day=DAY, now=ts(16), tz=TZ)
+    assert drain(html) == pytest.approx(5.0)
+
+
+@pytest.mark.parametrize(("gap_h", "counted"), [(1.5, True), (1.51, False)])
+def test_drain_gap_factor_boundary(db: Database, gap_h: float, counted: bool) -> None:
+    assert report.DRAIN_GAP_FACTOR == 1.5
+    metric(db, ts(8), battery_percent=80, on_ac=0)
+    metric(db, ts(8 + gap_h), battery_percent=77, on_ac=0)
+    html = report.generate_report(db, day=DAY, now=ts(16), tz=TZ)
+    assert (drain(html) is not None) is counted
+
+
+def test_drain_treats_a_split_minute_as_one_reading(db: Database) -> None:
+    metric(db, ts(8), 60.0, battery_percent=80, on_ac=0)
+    metric(db, ts(8) + 60, 40.0, battery_percent=80, on_ac=0)
+    metric(db, ts(8) + 60, 20.0, battery_percent=80, on_ac=0, paused_reasons="locked")
+    metric(db, ts(8) + 120, 60.0, battery_percent=79, on_ac=0)
+    html = report.generate_report(db, day=DAY, now=ts(16), tz=TZ)
+    assert drain(html) == pytest.approx(30.0)  # 1 % over 2 minutes
+
+
+@pytest.mark.parametrize(("n", "raw"), [(4, True), (5, False)])
+def test_min_alerts_for_rate_boundary(db: Database, n: int, raw: bool) -> None:
+    assert report.MIN_ALERTS_FOR_RATE == 5
+    metric(db, ts(12), 4 * 3600.0)
+    for i in range(n):
+        db.insert_alert(
+            ts=ts(9 + i / 10), label="slouch", bad_fraction=0.9, window_s=60,
+            model_version="m", calibration_id=None,
+        )  # fmt: skip
+    html = report.generate_report(db, day=DAY, now=ts(16), tz=TZ)
+    text = re.search(r'data-figure="false_alert_rate" data-scope="day"[^>]*>([^<]*)<', html)
+    assert text and (f"of {n} alerts" in text.group(1)) is raw
+
+
+def test_pause_table_notes_that_reasons_overlap(db: Database) -> None:
+    metric(db, ts(9), 600.0, paused_reasons="locked,in_call:meet")
+    html = report.generate_report(db, day=DAY, now=ts(16), tz=TZ)
+    assert value(html, "day", "pause_s:locked") == "600"
+    assert value(html, "day", "pause_s:in_call:meet") == "600"
+    assert report.PAUSE_NOTE in html
+
+
+def test_report_reads_through_a_read_only_connection(tmp_path, monkeypatch) -> None:
+    db = Database(tmp_path / "ro.db")
+    metric(db, ts(9))
+
+    def shared(*_a: object) -> None:
+        raise AssertionError("report used the shared connection")
+
+    monkeypatch.setattr(db, "query", shared)
+    html = report.generate_report(db, day=DAY, now=ts(16), tz=TZ)
+    assert value(html, "day", "monitored_s") == "3600"
+    with db.read_only() as reader, pytest.raises(Exception, match="readonly"):
+        reader.query("DELETE FROM metrics")
+    db.close()
+
+
+@pytest.mark.parametrize(("day", "hours"), [(date(2025, 3, 30), 23), (date(2025, 10, 26), 25)])
+def test_dst_days_run_midnight_to_midnight(db: Database, day: date, hours: int) -> None:
+    from zoneinfo import ZoneInfo
+
+    london = ZoneInfo("Europe/London")
+    start = report._midnight(day, london)
+    end = report._midnight(day + timedelta(days=1), london)
+    assert end - start == hours * 3600
+    metric(db, end - 1, 3600.0)  # 23:59:59 local: still this day
+    metric(db, end, 3600.0)  # next midnight: the next day
+    html = report.generate_report(db, day=day, now=end + 3600, tz=london)
+    assert value(html, "day", "monitored_s") == "3600"
+
+
+def test_open_report_failure_shows_a_message(db, calibration, clock) -> None:  # type: ignore[no-untyped-def]
+    from acceptance.conftest import Rig
+    from posture_checker import app as app_mod
+
+    rig = Rig(db, calibration, clock)
+
+    def broken(_path: object) -> None:
+        raise OSError("no browser")
+
+    app = app_mod.App(
+        monitor=rig.monitor, supervisor=rig.supervisor, db=db, notifier=rig.notifier,
+        clock=clock, report_opener=broken,
+    )  # fmt: skip
+    app.open_report()
+    assert rig.notifier.messages == [app_mod.REPORT_ERROR]
