@@ -35,8 +35,8 @@ current one.
   (stored as a label for later training), calibrate, settings, open report,
   open data folder.
 - "Open report" writes `report.html` in the data folder (today plus the last
-  7 days: posture share, alerts, false-alert rate, pauses, CPU, memory and
-  battery) and opens it in your browser. The page is a single local file with
+  7 days: time at the desk, away and paused, posture share, alerts,
+  false-alert rate, CPU, memory and battery; only time Hunch recorded counts) and opens it in your browser. The page is a single local file with
   no network access. Hunch records one row of health numbers a minute for it.
 
 ## Install (Stage 2)
