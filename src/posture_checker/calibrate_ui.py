@@ -130,7 +130,7 @@ def run_window(controller: CalibrationController) -> int:  # pragma: no cover - 
     from tkinter import ttk
 
     root = tk.Tk()
-    root.title("Posture Checker: calibrate")
+    root.title("Hunch: calibrate")
     root.resizable(False, False)
     root.attributes("-topmost", True)
     frame = ttk.Frame(root, padding=16)

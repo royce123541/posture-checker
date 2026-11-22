@@ -20,7 +20,7 @@ from typing import Protocol
 from posture_checker import actions, paths
 from posture_checker import tray as tray_mod
 from posture_checker.calibrate_flow import Launcher, gui_command, launch, run_calibration
-from posture_checker.monitor import CAMERA_UNAVAILABLE, PAUSED, Monitor, Sample
+from posture_checker.monitor import AWAY, CAMERA_UNAVAILABLE, PAUSED, Monitor, Sample
 from posture_checker.platform.camera_usage import RegistryCameraUsage, filetime_now
 from posture_checker.platform.registry import Registry
 from posture_checker.platform.single_instance import InstanceLock
@@ -51,8 +51,8 @@ PAUSE_1_HOUR_S = 60 * 60
 ALERT_STATE_CACHE_S = 10.0
 
 CALIBRATE_PROMPT = "Calibrate to start: sit in your good posture for a few seconds."
-ERROR_TOAST = "Posture Checker hit an error and will retry in 30 seconds. Details are in the log."
-ALREADY_RUNNING = "Posture Checker is already running."
+ERROR_TOAST = "Hunch hit an error and will retry in 30 seconds. Details are in the log."
+ALREADY_RUNNING = "Hunch is already running."
 
 
 class AppNotifier(Protocol):
@@ -141,6 +141,8 @@ class App:
             camera_available=self.monitor.last_state != CAMERA_UNAVAILABLE,
             has_recent_alert=has_recent,
             latest_alert_marked=marked,
+            away=self.monitor.last_state == AWAY,
+            presence_check=self.monitor.presence_check,
         )
 
     def status(self) -> tuple[str, str]:
@@ -176,7 +178,9 @@ class App:
         self._error_shown = False
         if sample.alert_id is not None:
             self._forget_alert_state()  # "Mark latest alert wrong" becomes available
-        return self.monitor.next_interval(sample)
+        # Fixes F3: the interval runs from one sample's start to the next.
+        took = self.clock() - now
+        return max(0.0, self.monitor.next_interval(sample) - took)
 
     def _pause_changed(self) -> bool:
         """True if the paused/running decision differs from the last sample's."""
@@ -315,7 +319,19 @@ def claim_single_instance(
     return True
 
 
-def main() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
+def main() -> int:
+    """Entry point for ``hunch.exe`` and ``posture-checker app``."""
+    from posture_checker.platform.console import relaunch_without_console
+
+    # A uv launcher (hunch.exe or pythonw.exe) may give the app its own console
+    # window at sign-in: start again without one (live check L4). Nothing else
+    # runs first: the copy that exits must not touch the lock or the camera.
+    if relaunch_without_console(["app"]):
+        return 0
+    return run_app()
+
+
+def run_app() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
     """Run the tray app until Quit."""
     from posture_checker.platform.single_instance import Win32MutexBackend
     from posture_checker.platform.windows import ToastNotifier
@@ -374,7 +390,7 @@ def main() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
     )
     icon = tray_mod.TrayIcon(app.state, app.tray_actions())
     worker = threading.Thread(target=app.run, args=(stop,), name="monitor", daemon=True)
-    log.info("Posture Checker starting (model %s)", monitor.model.version)
+    log.info("Hunch starting (model %s)", monitor.model.version)
     app.startup()
     worker.start()
     try:
@@ -384,5 +400,5 @@ def main() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
         worker.join(timeout=QUIT_JOIN_S)
         monitor.release_camera()
         db.close()
-        log.info("Posture Checker stopped")
+        log.info("Hunch stopped")
     return 0

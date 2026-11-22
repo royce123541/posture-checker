@@ -1,6 +1,6 @@
-# Posture Checker
+# Hunch
 
-A background posture checker for a Windows laptop, built around an on-device
+Hunch, a background posture checker for a Windows laptop, built around an on-device
 MLOps loop: user feedback becomes labeled data, models are versioned and
 retrained on a schedule, and a new model is deployed only if it beats the
 current one.
@@ -39,7 +39,7 @@ current one.
 From the repository folder, in PowerShell (no admin rights needed):
 
 ```powershell
-.\install.ps1                # uv sync, pose model, autostart at login, start the app
+.\install.ps1                # uv sync, pose model, autostart at sign-in, start the app
 .\install.ps1 -NoAutostart   # same, without starting at login
 .\uninstall.ps1              # stop the app, remove autostart; keeps your data
 .\uninstall.ps1 -RemoveData  # also delete %LOCALAPPDATA%\PostureChecker
@@ -50,6 +50,15 @@ at most 3 x 1 MB). `camera_mode` (`hold` or `burst`) is in Settings; the
 default is `burst`, because the camera sharing probe
 (`uv run python scripts/camera_share_probe.py`) showed that `hold` blocks other
 apps from the webcam; see `docs/results/camera-sharing.md`.
+
+Autostart is a shortcut `Hunch.lnk` in your Startup folder (`shell:startup`).
+It runs `.venv\Scripts\hunch.exe`, a windowless launcher uv builds for the
+`hunch` GUI entry point, from the repository folder, minimised; Task Manager's
+Startup apps names it after that program ("hunch"). The installer and the
+"Start at login" box in Settings both create or delete it, and both remove the
+`Posture Checker.lnk` shortcut and `PostureChecker` Run value older versions
+used. The command, package and data folder keep the `posture-checker` /
+`PostureChecker` names.
 
 ## Terminal use (Stage 1)
 
@@ -141,10 +150,12 @@ Settings persist with `posture-checker config --window 90 --sensitivity 1.2`.
   After a Meet call ends, the "meeting ended" page keeps the meeting title, so
   monitoring resumes when that tab is closed, or about a minute later when Meet
   leaves the page (observed in live check L2b).
-- In `burst` camera mode a sample is taken about every 5 s rather than every
-  2 s, because the camera is opened for each one.
-- The tray shows "monitoring" while nobody is at the desk.
-- Task Manager's Startup apps lists the app as "pythonw".
+- In `burst` camera mode the camera is opened for every sample, so samples
+  are at most as frequent as the camera can open. The interval is counted from
+  one sample's start to the next. On the development laptop, opening the camera
+  and reading a frame took about 1.3 s per sample and samples still started
+  every 2 s (`docs/results/burst-timing.md`, measured by
+  `scripts/bench_burst.py`); a slower camera would make sampling slower.
 - Windows only.
 
 ## Development

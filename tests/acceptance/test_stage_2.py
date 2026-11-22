@@ -29,11 +29,15 @@ posture_checker.platform.camera_usage
     the FakeRegistry in conftest: subkeys(path), values(path), set_value,
     delete_value, delete_key; FileNotFoundError for a missing key).
 posture_checker.platform.autostart
-    enable_autostart(registry), disable_autostart(registry) (no error if
-    absent), is_autostart_enabled(registry). Run value name "PostureChecker".
+    Autostart is the "Hunch.lnk" shortcut in a Startup folder (see
+    test_stage_2_fixes.py): enable_autostart(registry, *, writer, startup_dir),
+    disable_autostart(registry, *, startup_dir) (no error if absent),
+    is_autostart_enabled(*, startup_dir). Both remove an old "PostureChecker"
+    Run value.
 posture_checker.install
-    register(registry, *, autostart=True)  (AUMID key + Run value)
-    unregister(registry, *, remove_data=False)  (never raises)
+    register(registry, *, writer, startup_dir, autostart=True)  (AUMID key +
+      Startup shortcut)
+    unregister(registry, *, startup_dir, remove_data=False)  (never raises)
 posture_checker.platform.single_instance
     InstanceLock(backend) with .acquire() -> bool; backend.try_create(name).
 posture_checker.tray
@@ -86,7 +90,6 @@ from acceptance.conftest import (
     FakeLauncher,
     FakeLockState,
     FakeMutexBackend,
-    FakeRegistry,
     Rig,
 )
 from conftest import FakePose
@@ -749,31 +752,33 @@ def test_monitor_error_is_logged_toasted_once_and_restarts_after_30s(make_rig, d
 
 
 # --- 22 -----------------------------------------------------------------------
-def test_enable_autostart_writes_one_run_value(registry):
-    """Behaviour 22: one PostureChecker Run value with pythonw -m posture_checker app."""
+def test_enable_autostart_writes_one_shortcut(hunch_exe, registry, shortcut_writer, startup_dir):
+    """Behaviour 22: one Startup shortcut running hunch.exe with no arguments."""
     auto = import_module("posture_checker.platform.autostart")
-    auto.enable_autostart(registry)
-    auto.enable_autostart(registry)
-    values = registry.run_values()
-    assert list(values) == ["PostureChecker"]
-    assert "pythonw.exe" in values["PostureChecker"]
-    assert "-m posture_checker app" in values["PostureChecker"]
-    assert auto.is_autostart_enabled(registry) is True
+    auto.enable_autostart(registry, writer=shortcut_writer, startup_dir=startup_dir)
+    auto.enable_autostart(registry, writer=shortcut_writer, startup_dir=startup_dir)
+    assert [p.name for p in startup_dir.iterdir()] == ["Hunch.lnk"]
+    call = shortcut_writer.created[-1]
+    assert Path(call["target"]) == hunch_exe
+    assert call["arguments"] == ""
+    assert registry.run_values() == {}
+    assert auto.is_autostart_enabled(startup_dir=startup_dir) is True
 
 
-def test_register_adds_aumid_and_run_value(registry):
-    """Behaviour 22: the Python part of install registers AUMID and Run value."""
+def test_register_adds_aumid_and_shortcut(hunch_exe, registry, shortcut_writer, startup_dir):
+    """Behaviour 22: the Python part of install registers AUMID and the shortcut."""
     install = import_module("posture_checker.install")
-    install.register(registry)
+    install.register(registry, writer=shortcut_writer, startup_dir=startup_dir)
     assert AUMID_KEY in registry.keys
-    assert "PostureChecker" in registry.run_values()
+    assert (startup_dir / "Hunch.lnk").exists()
 
 
-def test_register_without_autostart_skips_run_value(registry):
-    """Behaviour 22: no Run value when autostart is off."""
+def test_register_without_autostart_skips_shortcut(registry, shortcut_writer, startup_dir):
+    """Behaviour 22: no shortcut and no Run value when autostart is off."""
     install = import_module("posture_checker.install")
-    install.register(registry, autostart=False)
+    install.register(registry, writer=shortcut_writer, startup_dir=startup_dir, autostart=False)
     assert AUMID_KEY in registry.keys
+    assert list(startup_dir.iterdir()) == []
     assert registry.run_values() == {}
 
 
@@ -781,36 +786,36 @@ def test_register_without_autostart_skips_run_value(registry):
 def test_install_script_mentions_run_value_and_aumid():
     """Behaviour 22: install.ps1 names the Run value and the AUMID (parsed, not run)."""
     text = (REPO / "install.ps1").read_text(encoding="utf-8")
-    assert "PostureChecker" in text
     assert "PostureChecker.App" in text or "register" in text.lower()
     assert "uv sync" in text
 
 
 # --- 23 -----------------------------------------------------------------------
-def test_unregister_removes_run_value_and_aumid(registry):
-    """Behaviour 23: uninstall removes the Run value and the AUMID key."""
+def test_unregister_removes_shortcut_and_aumid(hunch_exe, registry, shortcut_writer, startup_dir):
+    """Behaviour 23: uninstall removes the Startup shortcut and the AUMID key."""
     install = import_module("posture_checker.install")
-    install.register(registry)
-    install.unregister(registry)
+    install.register(registry, writer=shortcut_writer, startup_dir=startup_dir)
+    install.unregister(registry, startup_dir=startup_dir)
+    assert list(startup_dir.iterdir()) == []
     assert registry.run_values() == {}
     assert AUMID_KEY not in registry.keys
 
 
-def test_unregister_on_empty_registry_raises_nothing(registry):
+def test_unregister_on_empty_registry_raises_nothing(registry, startup_dir):
     """Behaviour 23: uninstall without a prior install, and twice, succeeds."""
     install = import_module("posture_checker.install")
-    install.unregister(registry)
-    install.unregister(registry)
+    install.unregister(registry, startup_dir=startup_dir)
+    install.unregister(registry, startup_dir=startup_dir)
 
 
-def test_unregister_keeps_data_unless_remove_data(registry):
+def test_unregister_keeps_data_unless_remove_data(registry, startup_dir):
     """Behaviour 23: data folder survives uninstall; -RemoveData deletes it."""
     install = import_module("posture_checker.install")
     data = paths.app_dir()
     (data / "posture.db").write_text("x")
-    install.unregister(registry)
+    install.unregister(registry, startup_dir=startup_dir)
     assert (data / "posture.db").exists()
-    install.unregister(registry, remove_data=True)
+    install.unregister(registry, startup_dir=startup_dir, remove_data=True)
     assert not (data / "posture.db").exists()
 
 
@@ -821,15 +826,16 @@ def test_uninstall_script_exists():
 
 
 # --- 24 -----------------------------------------------------------------------
-def test_settings_autostart_toggle_uses_the_same_run_value(registry):
-    """Behaviour 24: toggling autostart in Settings adds or removes the Run value."""
+def test_settings_autostart_toggle_uses_the_same_shortcut(
+    hunch_exe, registry, shortcut_writer, startup_dir
+):
+    """Behaviour 24: toggling autostart in Settings adds or removes the shortcut."""
     ui = import_module("posture_checker.settings_ui")
-    auto = import_module("posture_checker.platform.autostart")
     save_config(Config())
-    controller = ui.SettingsController(paths.config_path(), registry)
+    controller = ui.SettingsController(
+        paths.config_path(), registry, writer=shortcut_writer, startup_dir=startup_dir
+    )
     assert controller.save({"autostart": True}) is None
-    reference = FakeRegistry()
-    auto.enable_autostart(reference)
-    assert registry.run_values() == reference.run_values()
+    assert (startup_dir / "Hunch.lnk").exists()
     assert controller.save({"autostart": False}) is None
-    assert registry.run_values() == {}
+    assert not (startup_dir / "Hunch.lnk").exists()

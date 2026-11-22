@@ -263,3 +263,74 @@ def make_call_rig(db, calibration, clock, lister):
 @pytest.fixture
 def registry() -> FakeRegistry:
     return FakeRegistry()
+
+
+class FakeShortcutWriter:
+    """Stand-in for the WScript.Shell shortcut writer.
+
+    ``create`` records its arguments and writes an empty file at ``path`` so
+    "the shortcut exists" can be checked on a temporary Startup folder.
+    """
+
+    def __init__(self) -> None:
+        self.created: list[dict[str, Any]] = []
+
+    def create(
+        self, path: Any, target: Any, arguments: str, working_dir: Any, minimised: bool
+    ) -> None:
+        self.created.append(
+            {
+                "path": path,
+                "target": target,
+                "arguments": arguments,
+                "working_dir": working_dir,
+                "minimised": minimised,
+            }
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fake shortcut", encoding="utf-8")
+
+
+@pytest.fixture
+def shortcut_writer() -> FakeShortcutWriter:
+    return FakeShortcutWriter()
+
+
+@pytest.fixture
+def hunch_exe(tmp_path, monkeypatch):
+    """A fake interpreter folder holding python.exe and hunch.exe; sys.executable points there.
+
+    Autostart looks for ``hunch.exe`` next to the running interpreter, so tests
+    that enable autostart use this fixture. Returns the hunch.exe path.
+    """
+    import sys
+
+    scripts = tmp_path / "fake-venv" / "Scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "python.exe").write_text("")
+    exe = scripts / "hunch.exe"
+    exe.write_text("")
+    monkeypatch.setattr(sys, "executable", str(scripts / "python.exe"))
+    return exe
+
+
+@pytest.fixture
+def startup_dir(tmp_path):
+    folder = tmp_path / "Startup"
+    folder.mkdir()
+    return folder
+
+
+class RecordingStop:
+    """Stop-event stand-in for ``Monitor.run``: records each wait, stops after N."""
+
+    def __init__(self, waits_allowed: int) -> None:
+        self.waits: list[float] = []
+        self.waits_allowed = waits_allowed
+
+    def is_set(self) -> bool:
+        return len(self.waits) >= self.waits_allowed
+
+    def wait(self, timeout: float | None = None) -> bool:
+        self.waits.append(float(timeout or 0.0))
+        return self.is_set()
