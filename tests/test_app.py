@@ -139,7 +139,7 @@ def test_run_loop_acts_on_a_pause_without_waiting_for_the_next_sample(
     db, calibration, clock, monkeypatch
 ) -> None:
     monkeypatch.setattr("posture_checker.app.PAUSE_POLL_S", 0.01)
-    rig, app = make_app(db, calibration, clock, sample_interval_s=60)
+    rig, app = make_app(db, calibration, clock, sample_interval_s=60, camera_mode="hold")
     stop = threading.Event()
     thread = threading.Thread(target=app.run, args=(stop,), daemon=True)
     thread.start()
