@@ -54,8 +54,26 @@ def test_config_command_changes_and_prints_settings(capsys) -> None:
 
 def test_cli_knows_its_commands() -> None:
     parser = build_parser()
-    for command in ("fetch-model", "doctor", "calibrate", "run", "mark-wrong", "config"):
+    commands = (
+        "fetch-model",
+        "doctor",
+        "calibrate",
+        "run",
+        "record",
+        "fit-rules",
+        "mark-wrong",
+        "config",
+    )
+    for command in commands:
         assert parser.parse_args([command]).command == command
+
+
+def test_blocked_toast_reasons_cover_every_windows_setting() -> None:
+    from posture_checker.platform.windows import BLOCKED_REASONS
+
+    # Windows NotificationSetting: 0 is enabled, 1-4 are the ways it can be off.
+    assert set(BLOCKED_REASONS) == {1, 2, 3, 4}
+    assert "Settings > System > Notifications" in BLOCKED_REASONS[2]
 
 
 def test_mark_wrong_without_alerts_is_harmless(capsys) -> None:

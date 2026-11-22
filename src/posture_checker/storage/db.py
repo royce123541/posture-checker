@@ -74,6 +74,23 @@ CREATE TABLE IF NOT EXISTS events (
     kind   TEXT NOT NULL,
     detail TEXT
 );
+
+-- Labelled samples from guided recording sessions: the label is the posture
+-- the user was asked to hold. Raw features are kept so relative features can
+-- be recomputed against any calibration later.
+CREATE TABLE IF NOT EXISTS recorded_samples (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    session        TEXT NOT NULL,
+    ts             REAL NOT NULL,
+    step           INTEGER NOT NULL,
+    label          TEXT NOT NULL,
+    confidence     REAL NOT NULL,
+    raw_json       TEXT NOT NULL,
+    features_json  TEXT NOT NULL,
+    landmarks_json TEXT NOT NULL,
+    calibration_id INTEGER REFERENCES calibrations(id)
+);
+CREATE INDEX IF NOT EXISTS idx_recorded_session ON recorded_samples(session);
 """
 
 
@@ -233,3 +250,58 @@ class Database:
         return self._execute(
             "INSERT INTO events(ts, kind, detail) VALUES (?, ?, ?)", (ts, kind, detail)
         )
+
+    # --- guided recordings --------------------------------------------------
+    def insert_recorded_sample(
+        self,
+        *,
+        session: str,
+        ts: float,
+        step: int,
+        label: str,
+        confidence: float,
+        raw: Mapping[str, float],
+        features: Mapping[str, float],
+        landmarks: list[list[float]],
+        calibration_id: int | None,
+    ) -> int:
+        return self._execute(
+            "INSERT INTO recorded_samples(session, ts, step, label, confidence, raw_json,"
+            " features_json, landmarks_json, calibration_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                session,
+                ts,
+                step,
+                label,
+                confidence,
+                _to_json(raw),
+                _to_json(features),
+                _to_json(landmarks),
+                calibration_id,
+            ),
+        )
+
+    def recorded_sessions(self) -> list[str]:
+        """Recording session ids, oldest first."""
+        rows = self.query("SELECT session FROM recorded_samples GROUP BY session ORDER BY MIN(ts)")
+        return [row["session"] for row in rows]
+
+    def recorded_samples(self, sessions: list[str] | None = None) -> list[dict[str, Any]]:
+        """Labelled samples in time order, with features decoded (missing -> NaN)."""
+        sql = "SELECT * FROM recorded_samples"
+        params: tuple[Any, ...] = ()
+        if sessions:
+            sql += f" WHERE session IN ({','.join('?' * len(sessions))})"
+            params = tuple(sessions)
+        rows = self.query(sql + " ORDER BY ts", params)
+        return [
+            {
+                "session": row["session"],
+                "ts": row["ts"],
+                "step": row["step"],
+                "label": row["label"],
+                "confidence": row["confidence"],
+                "features": _from_json(row["features_json"]),
+            }
+            for row in rows
+        ]
