@@ -507,16 +507,21 @@ def insert_metrics(
     reasons: str = "",
     model_version: str | None = "rules-v9-test",
     calibration_id: int | None = None,
+    n_present: int | None = None,
+    n_low: int = 0,
+    n_away: int = 0,
 ) -> None:
     """Insert one metrics row with raw SQL on the database file (spec B2 column names)."""
     import sqlite3
 
+    if n_present is None:  # by default a monitoring row is entirely at the desk
+        n_present = 20 if not reasons else 0
     conn = sqlite3.connect(db.path)
     try:
         conn.execute(
             f"INSERT INTO metrics({METRIC_COLUMNS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (ts, interval_s, cpu, rss, 0, 0, 0, None, None, confidence, battery, on_ac,
-             "burst", reasons, model_version, calibration_id, 1.0),
+            (ts, interval_s, cpu, rss, n_present, n_low, n_away, None, None, confidence,
+             battery, on_ac, "burst", reasons, model_version, calibration_id, 1.0),
         )  # fmt: skip
         conn.commit()
     finally:

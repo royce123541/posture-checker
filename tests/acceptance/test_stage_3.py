@@ -70,7 +70,8 @@ posture_checker.report
     (seconds, fractions 0-1, counts, %/h) or is absent when there is no data.
     Scopes: "day" (the chosen day), "week" (7 days ending it), "page" (page-wide).
     Keys per scope day/week:
-      monitored_s, good_share, alerts_total, alerts_wrong, alerts_per_hour,
+      at_desk_s, away_s, paused_s (seconds; replace the old monitored_s, see
+      test_stage_3_coverage.py), good_share, alerts_total, alerts_wrong, alerts_per_hour,
       false_alert_rate, alerts_label:<label>, labels:<label>,
       pause_s:<reason>,
       cpu_mean:<mode>, cpu_p95:<mode>, rss_mean_mb:<mode>, rss_max_mb:<mode>,
@@ -538,7 +539,9 @@ def test_b10_day_and_week_figures_are_computed_from_stored_rows(file_db, calibra
     page = parse(html_for(file_db))
     expected = {
         "day": {
-            "monitored_s": 4 * 3600,
+            "at_desk_s": 4 * 3600,
+            "away_s": 0,
+            "paused_s": 1800,
             "good_share": 0.7,
             "alerts_total": 3,
             "alerts_wrong": 1,
@@ -551,7 +554,9 @@ def test_b10_day_and_week_figures_are_computed_from_stored_rows(file_db, calibra
             "pause_s:in_call:meet": 1800,
         },
         "week": {
-            "monitored_s": 6 * 3600,
+            "at_desk_s": 6 * 3600,
+            "away_s": 0,
+            "paused_s": 1800,
             "good_share": 17 / 20,
             "alerts_total": 4,
             "alerts_wrong": 1,
@@ -628,7 +633,9 @@ def test_b13_empty_database_reads_no_data_everywhere(db) -> None:
     """Behaviour 13: nothing stored; every figure says "not measured yet" or "no data"."""
     page = parse(html_for(db))
     keys = [
-        "monitored_s",
+        "at_desk_s",
+        "away_s",
+        "paused_s",
         "good_share",
         "alerts_per_hour",
         "false_alert_rate",
@@ -724,6 +731,9 @@ def test_b15_generating_a_week_of_data_takes_under_five_seconds(file_db) -> None
 
 def test_b16_days_run_from_local_midnight(file_db) -> None:
     """Behaviour 16: 23:30 and 00:30 local fall on different days (timezone fixed at +02:00)."""
+    # Recorded windows covering both alerts: (23:00, 24:00] and (00:00, 01:00].
+    insert_metrics(file_db, local_ts(TZ, DAY, 24.0), 3600.0)
+    insert_metrics(file_db, local_ts(TZ, DAY, 1.0, 1), 3600.0)
     for ts in (local_ts(TZ, DAY, 23.5), local_ts(TZ, DAY, 0.5, 1)):
         file_db.insert_alert(
             ts=ts, label="slouch", bad_fraction=0.9, window_s=60.0,
