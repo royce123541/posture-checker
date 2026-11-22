@@ -109,6 +109,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_app(_: argparse.Namespace) -> int:
+    from posture_checker.platform.console import hide_own_console
+
+    # Autostart's uv launcher gives the app its own console window: hide it.
+    hide_own_console()
     from posture_checker.app import main as app_main
 
     return app_main()
