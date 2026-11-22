@@ -45,7 +45,7 @@ A: Tests scan the scripts for image writing and network use, and check that a ru
 - The registry "in use" rule and the screen-lock error code are unverified until live checks (L2, L3); lock was only tested in the unlocked state.
 - Battery Saver and low-battery paths were not tested on a real battery (L5).
 - The tray icon, its refresh, the Tk windows, toasts, the mutex and both install scripts were never run on a real desktop; scripts were only parsed.
-- Camera-in-use detection: during the L1 probe Windows recorded no camera use in the registry for any app, so the "pause during calls" signal did not fire. Burst mode keeps calls working regardless; whether the pause works is checked in L2.
+- Camera-in-use detection: during the L1 probe Windows recorded no camera use in the registry for any app, so the "pause during calls" signal did not fire. Burst mode keeps calls working regardless; L2 then confirmed that this Windows build no longer writes those registry values. A second signal was added: the supervisor now also pauses when a visible Meet, Zoom or Teams meeting window is open, matched from window titles and process names (`policy/calls.py`, with the same 10 s grace). Only the app name is kept, never the title. It is a heuristic (active Meet tab only, no Firefox) and is checked in live check L2b.
 - Deviation from the spec: "I'm slouching now" is a submenu (Slouching / Head forward / Too close), so it takes hover plus click, because pystray cannot make a submenu item clickable.
 - There is no explicit camera release at sign-out or shutdown; it is released only because the process ends.
 - Windows-only. No CPU, memory or battery numbers are claimed (Stage 6).

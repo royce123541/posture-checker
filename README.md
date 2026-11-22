@@ -28,6 +28,9 @@ current one.
   needs calibration or camera unavailable). It pauses and releases the webcam
   while another app uses it, while the screen is locked and on low battery,
   and samples only every 30 s after 5 minutes with nobody at the desk.
+- Pauses during Google Meet, Zoom and Teams calls, recognised from the meeting
+  window's title and process name (titles are never stored, only the app name).
+  The "Pause during calls" checkbox in Settings turns this off.
 - Tray menu: pause / resume, mark the latest alert wrong, "I'm slouching now"
   (stored as a label for later training), calibrate, settings, open data folder.
 
@@ -133,6 +136,8 @@ Settings persist with `posture-checker config --window 90 --sensitivity 1.2`.
   frame, head-to-shoulder distance), so results depend on a good calibration.
 - `rules-v0` thresholds are geometric starting points, not tuned values.
 - The webcam light stays on while monitoring.
+- Call detection is a title heuristic: Meet counts only when the meeting is the
+  active tab, Firefox is not covered, and app updates can change the titles.
 - Windows only.
 
 ## Development
