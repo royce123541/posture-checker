@@ -20,7 +20,7 @@ from __future__ import annotations
 import itertools
 import math
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
@@ -109,13 +109,26 @@ def best_threshold(positives: Sequence[float], negatives: Sequence[float]) -> tu
 
 
 def fit_thresholds(
-    train: Iterable[Mapping[str, Any]], current: Thresholds
+    train: Iterable[Mapping[str, Any]],
+    current: Thresholds,
+    keep: Collection[str] = (),
 ) -> tuple[Thresholds, list[ThresholdFit]]:
+    """Fit every threshold in ``TARGETS`` except those named in ``keep``.
+
+    Kept thresholds stay at their current value, for rules whose signal is too
+    weak to fit reliably (e.g. forward head from a front-facing camera).
+    """
+    unknown = set(keep) - set(TARGETS)
+    if unknown:
+        raise ValueError(f"unknown threshold(s): {', '.join(sorted(unknown))}")
     rows = [(s["label"], deviations(s["features"])) for s in train]
     fitted: dict[str, float] = {}
     report: list[ThresholdFit] = []
     for name, (fire_on, quiet_on) in TARGETS.items():
         old = getattr(current, name)
+        if name in keep:
+            report.append(ThresholdFit(name, old, old, False, 0, 0, None, "kept by request"))
+            continue
         pos = [d[name] for label, d in rows if label in fire_on and not math.isnan(d[name])]
         neg = [d[name] for label, d in rows if label in quiet_on and not math.isnan(d[name])]
         if len(pos) < MIN_SAMPLES_PER_SIDE or len(neg) < MIN_SAMPLES_PER_SIDE:

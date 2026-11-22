@@ -317,13 +317,22 @@ def cmd_fit_rules(args: argparse.Namespace) -> int:
         print("No recordings yet. Run `posture-checker record` first.", file=sys.stderr)
         db.close()
         return 1
-    chosen = sessions if args.all else sessions[-1:]
+    if args.session:
+        missing = [s for s in args.session if s not in sessions]
+        if missing:
+            print(f"Unknown recording session(s): {', '.join(missing)}", file=sys.stderr)
+            print(f"Recorded sessions: {', '.join(sessions)}", file=sys.stderr)
+            db.close()
+            return 1
+        chosen = list(dict.fromkeys(args.session))
+    else:
+        chosen = sessions if args.all else sessions[-1:]
     samples = db.recorded_samples(chosen)
     db.close()
 
     train, test = fr.time_blocked_split(samples)
     current = load_active(1.0)  # thresholds are fitted at sensitivity 1
-    fitted, fits = fr.fit_thresholds(train, current.thresholds)
+    fitted, fits = fr.fit_thresholds(train, current.thresholds, keep=args.keep or ())
     candidate = RulesModel(1.0, thresholds=fitted, version=fr.next_version(current.version))
     before = fr.evaluate(current, test)
     after = fr.evaluate(candidate, test)
@@ -435,8 +444,26 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--seconds", type=float, help="seconds per posture (default 25)")
     record.set_defaults(func=cmd_record)
 
+    from posture_checker.mlops.fit_rules import TARGETS as FIT_TARGETS
+
     fit = sub.add_parser("fit-rules", help="fit rule thresholds to your recordings")
-    fit.add_argument("--all", action="store_true", help="use every recording, not just the latest")
+    which = fit.add_mutually_exclusive_group()
+    which.add_argument(
+        "--all", action="store_true", help="use every recording, not just the latest"
+    )
+    which.add_argument(
+        "--session",
+        action="append",
+        metavar="ID",
+        help="use this recording session (repeat to combine several)",
+    )
+    fit.add_argument(
+        "--keep",
+        action="append",
+        metavar="THRESHOLD",
+        choices=list(FIT_TARGETS),
+        help="leave this threshold at its current value (repeatable)",
+    )
     fit.add_argument("--deploy", action="store_true", help="make the fitted rules active if better")
     fit.set_defaults(func=cmd_fit_rules)
 
