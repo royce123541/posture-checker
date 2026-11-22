@@ -23,3 +23,13 @@ Found during the checks, not fixed in Stage 2:
   measured yet).
 - The tray shows "monitoring" while nobody is present; it has no "away" text.
 - Task Manager lists the autostart entry as "pythonw", not "Posture Checker".
+
+## Stage 2 fixes and Hunch name (2026-11-22)
+
+| Check | Result | Notes |
+|---|---|---|
+| F1 Away tooltip | pass | "Hunch: away", then "Hunch: away, checking every 30 s" after 5 min away. |
+| F2 + R2 Startup name | pass | Startup apps lists "hunch". A shortcut named "Posture Checker" alone still showed "pythonw", because Task Manager names an entry after the program it runs. |
+| Sign out and in | pass | Hunch started with no console window. |
+| R1 Alert sender | pass after sign-out | The first alert still showed "Posture Checker": Windows kept the old name for the same toast identity until the owner signed out and back in. Running an older checkout also writes the old name back. |
+| F3 Burst timing | pass | Samples start every 2.0 s in both modes; see `burst-timing.md`. |
