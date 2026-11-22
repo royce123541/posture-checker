@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterator
 
 import numpy as np
@@ -113,3 +114,17 @@ class RecordingNotifier:
 @pytest.fixture
 def clock() -> FakeClock:
     return FakeClock()
+
+
+#: Set to 1 to run tests marked ``camera`` (real webcam or Windows hardware).
+#: Unset everywhere else, including CI, so those tests are skipped there.
+RUN_CAMERA_ENV = "POSTURE_RUN_CAMERA_TESTS"
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if os.environ.get(RUN_CAMERA_ENV) == "1":
+        return
+    skip = pytest.mark.skip(reason=f"needs real hardware; set {RUN_CAMERA_ENV}=1 to run")
+    for item in items:
+        if item.get_closest_marker("camera") is not None:
+            item.add_marker(skip)
