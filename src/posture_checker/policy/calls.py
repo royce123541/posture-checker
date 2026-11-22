@@ -19,15 +19,26 @@ ZOOM = "zoom"
 TEAMS = "teams"
 
 _BROWSERS = frozenset({"chrome.exe", "msedge.exe"})
-#: Meet titles a tab in a meeting "Meet - " plus the meeting code: 3, 4 and 3
-#: lowercase letters (spec C2).
+#: Meet titles a tab that is in a meeting as "Meet - " plus the meeting code,
+#: which is 3, 4 and 3 lowercase letters (spec C2).
 _MEET_TITLE = re.compile(r"^Meet - [a-z]{3}-[a-z]{4}-[a-z]{3}\b")
 _ZOOM_PROCESSES = frozenset({"zoom.exe"})
 _ZOOM_TITLES = frozenset({"Zoom Meeting", "Zoom Webinar"})
 _TEAMS_PROCESSES = frozenset({"ms-teams.exe", "teams.exe"})
 _TEAMS_SUFFIX = " | Microsoft Teams"
 #: Teams call window prefixes (spec C2); to be confirmed by live check L2b.
-_TEAMS_PREFIXES = ("Meeting with", "Meeting in", "Call with")
+#: The trailing space stops "Meeting without ..." from matching.
+_TEAMS_PREFIXES = ("Meeting with ", "Meeting in ", "Call with ")
+
+
+def could_match_title(title: str) -> bool:
+    """Cheap title-only pre-check: False means no rule can match this window.
+
+    The real lister uses it to skip the process-name lookup for most windows.
+    """
+    if _MEET_TITLE.match(title) or title in _ZOOM_TITLES:
+        return True
+    return title.removesuffix(_TEAMS_SUFFIX).startswith(_TEAMS_PREFIXES)
 
 
 def match_window(window: WindowInfo) -> str | None:

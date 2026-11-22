@@ -25,7 +25,7 @@ from posture_checker.platform.camera_usage import RegistryCameraUsage, filetime_
 from posture_checker.platform.registry import Registry
 from posture_checker.platform.single_instance import InstanceLock
 from posture_checker.platform.windows_list import WinWindowLister
-from posture_checker.policy.calls import CallDetector
+from posture_checker.policy.calls import CallDetector, could_match_title
 from posture_checker.policy.pausing import CALIBRATING, PauseSupervisor
 from posture_checker.settings_ui import ConfigWatcher
 from posture_checker.storage.db import Database
@@ -344,7 +344,7 @@ def main() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
         lock_state=WindowsLockState(),
         battery=PsutilBattery(),
         battery_pause_percent=config.battery_pause_percent,
-        calls=CallDetector(WinWindowLister()),
+        calls=CallDetector(WinWindowLister(title_filter=could_match_title)),
         pause_in_calls=config.pause_in_calls,
     )
     monitor = Monitor(
