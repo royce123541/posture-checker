@@ -1,4 +1,6 @@
-Status: draft
+Status: approved
+
+Approved by the owner on 2026-11-22 with the recommended answer to both decisions.
 
 # Stage 2 addition: show the app as "Hunch"
 
