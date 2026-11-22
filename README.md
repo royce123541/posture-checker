@@ -39,7 +39,7 @@ current one.
 From the repository folder, in PowerShell (no admin rights needed):
 
 ```powershell
-.\install.ps1                # uv sync, pose model, autostart at login, start the app
+.\install.ps1                # uv sync, pose model, autostart at sign-in, start the app
 .\install.ps1 -NoAutostart   # same, without starting at login
 .\uninstall.ps1              # stop the app, remove autostart; keeps your data
 .\uninstall.ps1 -RemoveData  # also delete %LOCALAPPDATA%\PostureChecker
@@ -50,6 +50,13 @@ at most 3 x 1 MB). `camera_mode` (`hold` or `burst`) is in Settings; the
 default is `burst`, because the camera sharing probe
 (`uv run python scripts/camera_share_probe.py`) showed that `hold` blocks other
 apps from the webcam; see `docs/results/camera-sharing.md`.
+
+Autostart is a shortcut named "Posture Checker" in your Startup folder
+(`shell:startup`), so Task Manager's Startup apps lists it as "Posture
+Checker". It runs `.venv\Scripts\pythonw.exe -m posture_checker app` from the
+repository folder, minimised. The installer and the "Start at login" box in
+Settings both create or delete it, and both remove the `PostureChecker` Run
+value older versions used.
 
 ## Terminal use (Stage 1)
 
@@ -141,10 +148,11 @@ Settings persist with `posture-checker config --window 90 --sensitivity 1.2`.
   After a Meet call ends, the "meeting ended" page keeps the meeting title, so
   monitoring resumes when that tab is closed, or about a minute later when Meet
   leaves the page (observed in live check L2b).
-- In `burst` camera mode a sample is taken about every 5 s rather than every
-  2 s, because the camera is opened for each one.
-- The tray shows "monitoring" while nobody is at the desk.
-- Task Manager's Startup apps lists the app as "pythonw".
+- In `burst` camera mode the camera is opened for every sample, so samples
+  are at most as frequent as the camera can open. The interval is counted from
+  one sample's start to the next; see `docs/results/burst-timing.md` for the
+  measured timings (not measured yet until the owner runs
+  `scripts/bench_burst.py`).
 - Windows only.
 
 ## Development
