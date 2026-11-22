@@ -20,6 +20,7 @@ from typing import Protocol
 from posture_checker import actions, paths
 from posture_checker import tray as tray_mod
 from posture_checker.calibrate_flow import Launcher, gui_command, launch, run_calibration
+from posture_checker.metrics import MetricsRecorder, PsutilProbe
 from posture_checker.monitor import AWAY, CAMERA_UNAVAILABLE, PAUSED, Monitor, Sample
 from posture_checker.platform.camera_usage import RegistryCameraUsage, filetime_now
 from posture_checker.platform.registry import Registry
@@ -34,6 +35,7 @@ from posture_checker.tray import TrayState
 log = logging.getLogger(__name__)
 
 LOG_FILE = "posture-checker.log"
+REPORT_FILE = "report.html"
 #: Rotating log limits from spec behaviour 18: at most 1 MB x 3 files.
 LOG_MAX_BYTES = 1024 * 1024
 LOG_BACKUPS = 2
@@ -52,7 +54,13 @@ ALERT_STATE_CACHE_S = 10.0
 
 CALIBRATE_PROMPT = "Calibrate to start: sit in your good posture for a few seconds."
 ERROR_TOAST = "Hunch hit an error and will retry in 30 seconds. Details are in the log."
+REPORT_ERROR = "Hunch could not open the report. Details are in the log."
 ALREADY_RUNNING = "Hunch is already running."
+
+
+def open_file(path: Path) -> None:
+    """Open a local file with its default app (the browser for the report)."""
+    os.startfile(path)
 
 
 class AppNotifier(Protocol):
@@ -96,6 +104,8 @@ class App:
         launcher: Launcher | None = None,
         watcher: ConfigWatcher | None = None,
         on_quit: Callable[[], None] | None = None,
+        recorder: MetricsRecorder | None = None,
+        report_opener: Callable[[Path], None] | None = None,
     ) -> None:
         self.monitor = monitor
         self.supervisor = supervisor
@@ -105,6 +115,8 @@ class App:
         self.launcher: Launcher = launcher or launch
         self.watcher = watcher
         self.on_quit = on_quit
+        self.recorder = recorder
+        self.report_opener: Callable[[Path], None] = report_opener or open_file
         self._retry_at = 0.0
         self._error_shown = False
         self._last_sample: Sample | None = None
@@ -194,6 +206,8 @@ class App:
     def run(self, stop: threading.Event) -> None:
         """Sample until ``stop`` is set, then release the camera."""
         self.db.log_event(self.clock(), "start", self.monitor.model.version)
+        if self.recorder is not None:
+            self.recorder.start()
         try:
             while not stop.is_set():
                 delay = self.tick()
@@ -208,6 +222,11 @@ class App:
                         break  # act on a new pause, or resume, right away
         finally:
             self.monitor.release_camera()
+            if self.recorder is not None:
+                try:
+                    self.recorder.stop()  # the final partial minute (Stage 3, behaviour 7)
+                except Exception:
+                    log.exception("could not write the final metrics row")
             self.db.log_event(self.clock(), "stop")
 
     # --- tray actions -------------------------------------------------------
@@ -263,6 +282,18 @@ class App:
     def open_data_folder(self) -> None:
         os.startfile(paths.app_dir())
 
+    def open_report(self) -> None:
+        """Write today's report into the data folder and open it (Stage 3, behaviour 8)."""
+        from posture_checker.report import write_report
+
+        try:
+            path = write_report(self.db, paths.app_dir() / REPORT_FILE, now=self.clock())
+            self.report_opener(path)
+        except Exception:
+            # Runs on the tray thread: say so instead of failing silently there.
+            log.exception("could not write or open the report")
+            self.notifier.message(REPORT_ERROR)
+
     def quit(self) -> None:
         if self.on_quit is not None:
             self.on_quit()
@@ -279,6 +310,7 @@ class App:
             tray_mod.LABEL_TOO_CLOSE: lambda: self.label("too_close"),
             tray_mod.CALIBRATE: self.request_calibration,
             tray_mod.SETTINGS: self.open_settings,
+            tray_mod.OPEN_REPORT: self.open_report,
             tray_mod.OPEN_DATA: self.open_data_folder,
             tray_mod.QUIT: self.quit,
         }
@@ -355,22 +387,35 @@ def run_app() -> int:  # pragma: no cover - needs Windows, a webcam and a deskto
 
     config = load_config()
     db = Database()
+    battery = PsutilBattery()
     supervisor = PauseSupervisor(
         camera_usage=build_camera_usage(WinRegistry(), db),
         lock_state=WindowsLockState(),
-        battery=PsutilBattery(),
+        battery=battery,
         battery_pause_percent=config.battery_pause_percent,
         calls=CallDetector(WinWindowLister(title_filter=could_match_title)),
         pause_in_calls=config.pause_in_calls,
+    )
+    model = load_active(config.sensitivity)
+    # The lambdas read ``monitor`` when a row is written, after it exists below.
+    recorder = MetricsRecorder(
+        db=db,
+        config=config,
+        probe=PsutilProbe(battery),
+        clock=time.time,
+        paused_reasons=lambda: tuple(supervisor.reasons),
+        model_version=lambda: monitor.model.version,
+        calibration_id=lambda: monitor.calibration.id if monitor.calibration else None,
     )
     monitor = Monitor(
         config=config,
         db=db,
         source=Camera(config.camera_index, config.frame_width, config.frame_height),
         pose=PoseEstimator(),
-        model=load_active(config.sensitivity),
+        model=model,
         notifier=notifier,
         supervisor=supervisor,
+        recorder=recorder,
     )
     stop = threading.Event()
     icon: tray_mod.TrayIcon | None = None
@@ -387,6 +432,7 @@ def run_app() -> int:  # pragma: no cover - needs Windows, a webcam and a deskto
         notifier=notifier,
         watcher=ConfigWatcher(paths.config_path(), monitor),
         on_quit=on_quit,
+        recorder=recorder,
     )
     icon = tray_mod.TrayIcon(app.state, app.tray_actions())
     worker = threading.Thread(target=app.run, args=(stop,), name="monitor", daemon=True)

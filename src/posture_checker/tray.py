@@ -45,6 +45,7 @@ LABEL_FORWARD_HEAD = "label_forward_head"
 LABEL_TOO_CLOSE = "label_too_close"
 CALIBRATE = "calibrate"
 SETTINGS = "settings"
+OPEN_REPORT = "open_report"
 OPEN_DATA = "open_data"
 QUIT = "quit"
 
@@ -101,6 +102,7 @@ def menu_model(state: TrayState) -> list[MenuItem]:
         ),
         MenuItem("Calibrate...", CALIBRATE, enabled=not calibrating),
         MenuItem("Settings...", SETTINGS),
+        MenuItem("Open report", OPEN_REPORT),
         MenuItem("Open data folder", OPEN_DATA),
         MenuItem("Quit", QUIT),
     ]

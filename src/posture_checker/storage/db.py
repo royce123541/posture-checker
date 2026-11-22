@@ -11,9 +11,10 @@ import json
 import math
 import sqlite3
 import threading
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from posture_checker import paths
 from posture_checker.calibration import Calibration
@@ -105,7 +106,56 @@ CREATE TABLE IF NOT EXISTS recorded_samples (
     calibration_id INTEGER REFERENCES calibrations(id)
 );
 CREATE INDEX IF NOT EXISTS idx_recorded_session ON recorded_samples(session);
+
+-- One row per minute of app health (spec Stage 3, behaviour 2). Numbers and
+-- short labels only.
+CREATE TABLE IF NOT EXISTS metrics (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts               REAL NOT NULL,     -- end of the window
+    interval_s       REAL NOT NULL,
+    cpu_percent      REAL,              -- this process, all cores = 100
+    rss_mb           REAL,
+    n_present        INTEGER NOT NULL,
+    n_low_confidence INTEGER NOT NULL,
+    n_away           INTEGER NOT NULL,
+    latency_p50_ms   REAL,
+    latency_p95_ms   REAL,
+    mean_confidence  REAL,              -- present samples only
+    battery_percent  INTEGER,
+    on_ac            INTEGER,           -- 1 | 0 | NULL without a battery
+    camera_mode      TEXT,
+    paused_reasons   TEXT NOT NULL,     -- comma-separated, '' while running
+    model_version    TEXT,
+    calibration_id   INTEGER,
+    metrics_cost_ms  REAL
+);
+CREATE INDEX IF NOT EXISTS idx_metrics_ts ON metrics(ts);
 """
+
+#: Columns of the metrics table in insert order (spec Stage 3, behaviour 2).
+METRICS_COLUMNS = (
+    "ts",
+    "interval_s",
+    "cpu_percent",
+    "rss_mb",
+    "n_present",
+    "n_low_confidence",
+    "n_away",
+    "latency_p50_ms",
+    "latency_p95_ms",
+    "mean_confidence",
+    "battery_percent",
+    "on_ac",
+    "camera_mode",
+    "paused_reasons",
+    "model_version",
+    "calibration_id",
+    "metrics_cost_ms",
+)
+#: Metrics retention (spec Stage 3, decision 3): 90 days covers several weekly
+#: comparisons; the row cap bounds the table (roughly 20-30 MB) if the clock jumps.
+METRICS_MAX_AGE_DAYS = 90
+METRICS_MAX_ROWS = 200_000
 
 
 def _to_json(values: Mapping[str, float] | list[Any] | None) -> str | None:
@@ -123,6 +173,18 @@ def _to_json(values: Mapping[str, float] | list[Any] | None) -> str | None:
 
 def _from_json(text: str) -> dict[str, float]:
     return {k: (math.nan if v is None else v) for k, v in json.loads(text).items()}
+
+
+class Reader(Protocol):
+    def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]: ...
+
+
+class _ConnReader:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
+        return self._conn.execute(sql, params).fetchall()
 
 
 class Database:
@@ -161,6 +223,25 @@ class Database:
     def query(self, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         with self._lock:
             return self._conn.execute(sql, params).fetchall()
+
+    @contextmanager
+    def read_only(self) -> Iterator[Reader]:
+        """A separate read-only connection for long reads (the report).
+
+        It does not take the shared lock, so the monitor's writes go on while
+        it reads (WAL mode). An in-memory database has no file to reopen, so it
+        falls back to the shared connection.
+        """
+        if self.path == ":memory:":
+            yield self
+            return
+        uri = Path(self.path).resolve().as_uri() + "?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        try:
+            yield _ConnReader(conn)
+        finally:
+            conn.close()
 
     # --- calibrations -------------------------------------------------------
     def insert_calibration(self, calibration: Calibration) -> int:
@@ -288,6 +369,39 @@ class Database:
         return self._execute(
             "INSERT INTO events(ts, kind, detail) VALUES (?, ?, ?)", (ts, kind, detail)
         )
+
+    # --- metrics ------------------------------------------------------------
+    def insert_metrics(self, row: Mapping[str, Any]) -> int:
+        """Insert one metrics row; missing columns are stored as NULL."""
+        cols = ", ".join(METRICS_COLUMNS)
+        marks = ", ".join("?" * len(METRICS_COLUMNS))
+        return self._execute(
+            f"INSERT INTO metrics({cols}) VALUES ({marks})",
+            tuple(row.get(c) for c in METRICS_COLUMNS),
+        )
+
+    def prune_metrics(
+        self,
+        now: float,
+        max_age_days: int = METRICS_MAX_AGE_DAYS,
+        max_rows: int = METRICS_MAX_ROWS,
+    ) -> int:
+        """Delete rows older than ``max_age_days``, then the oldest above ``max_rows``.
+
+        Returns the number of rows deleted.
+        """
+        with self._lock:
+            cutoff = now - max_age_days * 86400.0
+            deleted = self._conn.execute("DELETE FROM metrics WHERE ts < ?", (cutoff,)).rowcount
+            (count,) = self._conn.execute("SELECT COUNT(*) FROM metrics").fetchone()
+            if count > max_rows:
+                deleted += self._conn.execute(
+                    "DELETE FROM metrics WHERE id IN"
+                    " (SELECT id FROM metrics ORDER BY ts, id LIMIT ?)",
+                    (count - max_rows,),
+                ).rowcount
+            self._conn.commit()
+            return int(deleted)
 
     # --- guided recordings --------------------------------------------------
     def insert_recorded_sample(
