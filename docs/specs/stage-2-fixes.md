@@ -1,4 +1,6 @@
-Status: draft
+Status: approved
+
+Approved by the owner on 2026-11-22 with the recommended answer to all three decisions.
 
 # Stage 2 fixes: away status, autostart name, burst timing
 
