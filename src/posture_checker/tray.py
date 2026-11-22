@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from posture_checker import monitor
 from posture_checker.policy.pausing import (
     CALIBRATING,
     CAMERA_IN_USE_PREFIX,
@@ -135,8 +136,6 @@ def tray_status(state: TrayState) -> tuple[str, str]:
     if state.away:
         if state.presence_check:
             # Read at call time so the tooltip never holds a second copy of the number.
-            from posture_checker import monitor
-
             seconds = int(monitor.PRESENCE_CHECK_INTERVAL_S)
             return GREEN, f"Posture Checker: away, checking every {seconds} s"
         return GREEN, "Posture Checker: away"

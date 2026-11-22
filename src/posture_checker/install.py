@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import logging
 import shutil
+import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -17,6 +18,7 @@ from pathlib import Path
 from posture_checker import paths
 from posture_checker.platform.autostart import (
     ShortcutWriter,
+    describe_failure,
     disable_autostart,
     enable_autostart,
 )
@@ -77,12 +79,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     registry = WinRegistry()
     startup_dir = default_startup_dir()
     if args.command == "register":
-        register(
-            registry,
-            writer=WScriptShortcutWriter(),
-            startup_dir=startup_dir,
-            autostart=not args.no_autostart,
-        )
+        try:
+            register(
+                registry,
+                writer=WScriptShortcutWriter(),
+                startup_dir=startup_dir,
+                autostart=not args.no_autostart,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            print(
+                f"Could not create the startup shortcut ({describe_failure(error)})",
+                file=sys.stderr,
+            )
+            return 1
         print("Registered toast identity" + ("" if args.no_autostart else " and autostart"))
     else:
         unregister(registry, startup_dir=startup_dir, remove_data=args.remove_data)

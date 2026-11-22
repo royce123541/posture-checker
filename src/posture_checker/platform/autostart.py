@@ -23,7 +23,9 @@ RUN_VALUE = "PostureChecker"
 #: The file name Task Manager shows (spec F2).
 SHORTCUT_NAME = "Posture Checker.lnk"
 APP_ARGUMENTS = "-m posture_checker app"
-#: Repository root: src/posture_checker/platform/autostart.py -> three parents up from src.
+#: Repository root: three folders above src/posture_checker/platform/. This
+#: assumes a source checkout run from the repo's .venv, which is how
+#: install.ps1 installs the app; a wheel install would need another folder.
 REPO_ROOT = Path(__file__).resolve().parents[3]
 #: IShellLink "show minimised" window style (SW_SHOWMINNOACTIVE), per the WScript docs.
 WINDOW_STYLE_MINIMISED = 7
@@ -66,13 +68,32 @@ class WScriptShortcutWriter:
             PC_LNK_STYLE=str(WINDOW_STYLE_MINIMISED if minimised else WINDOW_STYLE_NORMAL),
         )
         subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _PS_SCRIPT],
+            [str(powershell_executable()), "-NoProfile", "-NonInteractive", "-Command", _PS_SCRIPT],
             env=env,
             check=True,
             capture_output=True,
             timeout=WRITER_TIMEOUT_S,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+
+
+class AutostartError(OSError):
+    """The Startup shortcut could not be created."""
+
+
+def powershell_executable() -> Path:
+    """Windows PowerShell by absolute path, so a ``powershell.exe`` on PATH is never used."""
+    root = os.environ.get("SYSTEMROOT", r"C:\Windows")
+    return Path(root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+
+
+def describe_failure(error: BaseException) -> str:
+    """A short reason for a failed shortcut write, with PowerShell's stderr if any."""
+    stderr = getattr(error, "stderr", None)
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode(errors="replace")
+    detail = (stderr or "").strip() or str(error) or type(error).__name__
+    return detail
 
 
 def default_startup_dir() -> Path:
@@ -96,11 +117,18 @@ def _remove_run_value(registry: Registry) -> None:
 
 
 def enable_autostart(registry: Registry, *, writer: ShortcutWriter, startup_dir: Path) -> None:
-    """Write (or overwrite) the one Startup shortcut and drop the old Run value."""
+    """Write (or overwrite) the one Startup shortcut and drop the old Run value.
+
+    Raises ``AutostartError`` if pythonw.exe is missing, so a shortcut that
+    could never start the app is not written.
+    """
+    target = pythonw_executable()
+    if not target.exists():
+        raise AutostartError(f"pythonw.exe not found at {target}")
     startup_dir.mkdir(parents=True, exist_ok=True)
     writer.create(
         startup_dir / SHORTCUT_NAME,
-        pythonw_executable(),
+        target,
         APP_ARGUMENTS,
         REPO_ROOT,
         True,

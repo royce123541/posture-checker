@@ -25,18 +25,27 @@ Write-Host "Stopping Posture Checker if it is running..."
 Get-PostureCheckerProcess -RepoRoot $PSScriptRoot |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
-# Always the Python code path (posture_checker.install), never a copy of it here.
-$unregisterArgs = @("-m", "posture_checker.install", "unregister")
-if ($RemoveData) { $unregisterArgs += "--remove-data" }
+# Normally the Python code path (posture_checker.install), the same code the
+# installer and Settings use.
 $python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
 if (Test-Path $python) {
+    $unregisterArgs = @("-m", "posture_checker.install", "unregister")
+    if ($RemoveData) { $unregisterArgs += "--remove-data" }
     & $python @unregisterArgs
-} elseif (Get-Command uv -ErrorAction SilentlyContinue) {
-    # No venv (never installed, or deleted): let uv build one to run the same code.
-    uv run python @unregisterArgs
 } else {
-    Write-Warning "No .venv and no uv found: could not remove autostart or the toast identity."
-    exit 1
+    # No venv (never installed, or deleted): remove the same things directly,
+    # without creating a venv.
+    $startup = [Environment]::GetFolderPath("Startup")
+    Remove-Item -Path (Join-Path $startup "Posture Checker.lnk") `
+        -Force -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" `
+        -Name "PostureChecker" -ErrorAction SilentlyContinue
+    Remove-Item -Path "HKCU:\Software\Classes\AppUserModelId\PostureChecker.App" `
+        -Recurse -ErrorAction SilentlyContinue
+    if ($RemoveData) {
+        Remove-Item -Path (Join-Path $env:LOCALAPPDATA "PostureChecker") `
+            -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 if ($RemoveData) {

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import subprocess
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -21,6 +22,7 @@ from posture_checker.platform.autostart import (
     ShortcutWriter,
     WScriptShortcutWriter,
     default_startup_dir,
+    describe_failure,
     disable_autostart,
     enable_autostart,
     is_autostart_enabled,
@@ -107,12 +109,21 @@ class SettingsController:
             config.validate()
         except (ValueError, TypeError) as error:
             return f"Not saved: {error}"
-        save_config(config, self.config_path)
+        # Autostart first: if the shortcut cannot be changed, nothing is saved,
+        # so the config file and the Startup folder never disagree.
         if "autostart" in values:
-            if values["autostart"]:
-                enable_autostart(self.registry, writer=self.writer, startup_dir=self.startup_dir)
-            else:
-                disable_autostart(self.registry, startup_dir=self.startup_dir)
+            try:
+                if values["autostart"]:
+                    enable_autostart(
+                        self.registry, writer=self.writer, startup_dir=self.startup_dir
+                    )
+                else:
+                    disable_autostart(self.registry, startup_dir=self.startup_dir)
+            except (OSError, subprocess.SubprocessError) as error:
+                return (
+                    f"Not saved: could not change the startup shortcut ({describe_failure(error)})"
+                )
+        save_config(config, self.config_path)
         return None
 
 

@@ -36,7 +36,7 @@ Write-Host "2/4 Fetching the pose model..."
 & $python -m posture_checker fetch-model
 if ($LASTEXITCODE -ne 0) { throw "fetch-model failed" }
 
-Write-Host "3/4 Registering toast identity (PostureChecker.App) and autostart (Startup shortcut "Posture Checker")..."
+Write-Host "3/4 Registering toast identity (PostureChecker.App) and autostart (Startup shortcut 'Posture Checker')..."
 $registerArgs = @("-m", "posture_checker.install", "register")
 if ($NoAutostart) { $registerArgs += "--no-autostart" }
 & $python @registerArgs
