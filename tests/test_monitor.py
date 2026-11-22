@@ -26,7 +26,9 @@ class Rig:
         if calibration is not None:
             db.insert_calibration(calibration)
         self.monitor = mon.Monitor(
-            config=Config(**{"alert_window_s": 60, "cooldown_s": 300, **config}),
+            config=Config(
+                **{"alert_window_s": 60, "cooldown_s": 300, "camera_mode": "hold", **config}
+            ),
             db=db,
             source=self.camera,
             pose=FakePose(self._landmarks),

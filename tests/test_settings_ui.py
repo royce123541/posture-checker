@@ -23,7 +23,7 @@ def controller() -> SettingsController:
 def test_current_includes_autostart(controller) -> None:
     values = controller.current()
     assert values["alert_window_s"] == 60.0
-    assert values["camera_mode"] == "hold"
+    assert values["camera_mode"] == "burst"
     assert values["autostart"] is False
     controller.store({"autostart": True})
     assert controller.current()["autostart"] is True

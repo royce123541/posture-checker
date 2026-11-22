@@ -44,9 +44,9 @@ From the repository folder, in PowerShell (no admin rights needed):
 
 The app logs to `%LOCALAPPDATA%\PostureChecker\posture-checker.log` (rotating,
 at most 3 x 1 MB). `camera_mode` (`hold` or `burst`) is in Settings; the
-default stays `hold` until the camera sharing probe
-(`uv run python scripts/camera_share_probe.py`) has been run; see
-`docs/results/camera-sharing.md`.
+default is `burst`, because the camera sharing probe
+(`uv run python scripts/camera_share_probe.py`) showed that `hold` blocks other
+apps from the webcam; see `docs/results/camera-sharing.md`.
 
 ## Terminal use (Stage 1)
 

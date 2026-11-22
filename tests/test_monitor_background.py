@@ -50,7 +50,7 @@ def test_apply_config_updates_policy_model_and_battery(db, calibration, clock) -
 
 
 def test_switching_to_burst_releases_camera_at_next_sample(db, calibration, clock) -> None:
-    rig = Rig(db, calibration, clock)
+    rig = Rig(db, calibration, clock, camera_mode="hold")
     rig.tick(2)
     assert rig.camera.is_open
     rig.monitor.apply_config(Config(camera_mode="burst"))

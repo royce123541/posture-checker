@@ -41,9 +41,10 @@ class Config:
     frame_height: int = 480
     #: "hold" keeps the camera open between samples (Stage 1 behaviour);
     #: "burst" opens it, reads one frame and closes it for every sample, so other
-    #: apps can always take it. "hold" stays the default until live check L1
-    #: (scripts/camera_share_probe.py) shows whether holding blocks other apps.
-    camera_mode: str = "hold"
+    #: apps can always take it. Default "burst": live check L1
+    #: (docs/results/camera-sharing.md) showed that while "hold" has the webcam
+    #: open, neither the Windows Camera app nor a Meet preview gets a picture.
+    camera_mode: str = "burst"
 
     # --- Power --------------------------------------------------------------
     #: Pause monitoring below this battery percentage when unplugged.
