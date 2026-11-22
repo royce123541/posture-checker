@@ -138,6 +138,9 @@ Settings persist with `posture-checker config --window 90 --sensitivity 1.2`.
 - The webcam light stays on while monitoring.
 - Call detection is a title heuristic: Meet counts only when the meeting is the
   active tab, Firefox is not covered, and app updates can change the titles.
+  After a Meet call ends, the "meeting ended" page keeps the meeting title, so
+  monitoring resumes when that tab is closed, or about a minute later when Meet
+  leaves the page (observed in live check L2b).
 - Windows only.
 
 ## Development
