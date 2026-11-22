@@ -24,23 +24,124 @@ BATTERY_SAVER_ON = 1
 ERROR_ACCESS_DENIED = 5
 
 
-class WindowsLockState:
-    """Locked when the input desktop is the secure (lock / sign-in) desktop.
+#: WTS_INFO_CLASS value WTSSessionInfoEx (wtsapi32.h).
+WTS_SESSION_INFO_EX = 25
+#: WTS_CURRENT_SERVER_HANDLE and WTS_CURRENT_SESSION (wtsapi32.h): this machine,
+#: the session our process runs in.
+WTS_CURRENT_SERVER_HANDLE = 0
+WTS_CURRENT_SESSION = 0xFFFFFFFF
+#: WTSINFOEXW.Level value whose union member is WTSINFOEX_LEVEL1_W.
+WTS_INFOEX_LEVEL1 = 1
+#: WTSINFOEX_LEVEL1_W.SessionFlags values. Windows 7 / Server 2008 R2 return
+#: them inverted (a documented bug); those versions are not supported here.
+WTS_SESSIONSTATE_LOCK = 0
+WTS_SESSIONSTATE_UNLOCK = 1
+#: Character counts of the string fields in WTSINFOEX_LEVEL1_W (wtsapi32.h:
+#: WINSTATIONNAME_LENGTH + 1, USERNAME_LENGTH + 1, DOMAIN_LENGTH + 1).
+_WINSTATION_CHARS = 33
+_USERNAME_CHARS = 21
+_DOMAIN_CHARS = 18
 
-    While the workstation is locked, our process cannot open or switch to the
-    input desktop. This heuristic is widely used but not documented as a lock
-    signal; live check L3 confirms it on this machine.
+
+def _wts_level1() -> type[ctypes.Structure]:
+    from ctypes import wintypes
+
+    class Level1(ctypes.Structure):
+        _fields_ = (
+            ("SessionId", wintypes.ULONG),
+            ("SessionState", ctypes.c_int),
+            ("SessionFlags", wintypes.LONG),
+            ("WinStationName", wintypes.WCHAR * _WINSTATION_CHARS),
+            ("UserName", wintypes.WCHAR * _USERNAME_CHARS),
+            ("DomainName", wintypes.WCHAR * _DOMAIN_CHARS),
+            ("LogonTime", ctypes.c_longlong),
+            ("ConnectTime", ctypes.c_longlong),
+            ("DisconnectTime", ctypes.c_longlong),
+            ("LastInputTime", ctypes.c_longlong),
+            ("CurrentTime", ctypes.c_longlong),
+            ("IncomingBytes", wintypes.DWORD),
+            ("OutgoingBytes", wintypes.DWORD),
+            ("IncomingFrames", wintypes.DWORD),
+            ("OutgoingFrames", wintypes.DWORD),
+            ("IncomingCompressedBytes", wintypes.DWORD),
+            ("OutgoingCompressedBytes", wintypes.DWORD),
+        )
+
+    return Level1
+
+
+def wts_session_flags() -> int:  # pragma: no cover - needs Windows
+    """SessionFlags of our session from WTSQuerySessionInformationW.
+
+    Raises OSError if the call fails or returns an unexpected level.
+    """
+    from ctypes import wintypes
+
+    level1 = _wts_level1()
+
+    class InfoEx(ctypes.Structure):
+        # The union in WTSINFOEXW has only the Level1 member.
+        _fields_ = (("Level", wintypes.DWORD), ("Data", level1))
+
+    win_dll: Any = getattr(ctypes, "WinDLL")  # noqa: B009 - absent off Windows
+    wtsapi = win_dll("wtsapi32", use_last_error=True)
+    query = wtsapi.WTSQuerySessionInformationW
+    query.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    query.restype = wintypes.BOOL
+    free = wtsapi.WTSFreeMemory
+    free.argtypes = [ctypes.c_void_p]
+    free.restype = None
+
+    buffer = ctypes.c_void_p()
+    size = wintypes.DWORD()
+    if not query(
+        WTS_CURRENT_SERVER_HANDLE,
+        WTS_CURRENT_SESSION,
+        WTS_SESSION_INFO_EX,
+        ctypes.byref(buffer),
+        ctypes.byref(size),
+    ):
+        win_error: Any = getattr(ctypes, "WinError")  # noqa: B009 - absent off Windows
+        raise win_error(ctypes.get_last_error())
+    try:
+        if not buffer.value or size.value < ctypes.sizeof(InfoEx):
+            raise OSError(f"WTSSessionInfoEx returned {size.value} bytes")
+        info = ctypes.cast(buffer, ctypes.POINTER(InfoEx)).contents
+        if info.Level != WTS_INFOEX_LEVEL1:
+            raise OSError(f"WTSSessionInfoEx returned level {info.Level}")
+        return int(info.Data.SessionFlags)
+    finally:
+        free(buffer)
+
+
+class WindowsLockState:
+    """Locked when Windows reports our session as locked.
+
+    Primary signal: the documented session state (WTSQuerySessionInformationW,
+    WTSSessionInfoEx, SessionFlags). Live check L3 showed the older heuristic
+    (the input desktop cannot be opened or switched to) reported "locked" for
+    only about 5 s after Win+L on build 26300, so it is now only a fallback
+    for when the session query fails.
     """
 
     def __init__(
         self,
         user32: Any = None,
         get_last_error: Callable[[], int] | None = None,
+        session_flags: Callable[[], int] | None = None,
     ) -> None:
-        """``user32`` and ``get_last_error`` are injectable for tests."""
+        """``user32``, ``get_last_error`` and ``session_flags`` are injectable for tests."""
         self._user32 = user32
         self._get_last_error = get_last_error
+        self._session_flags = session_flags or wts_session_flags
         self._reported_error = False
+        self._reported_wts_error = False
 
     def _api(self) -> tuple[Any, Callable[[], int]]:
         if self._user32 is None:
@@ -54,6 +155,21 @@ class WindowsLockState:
     def is_locked(self) -> bool:
         if sys.platform != "win32" and self._user32 is None:
             return False
+        try:
+            flags = self._session_flags()
+        except OSError as error:
+            if not self._reported_wts_error:
+                self._reported_wts_error = True
+                log.warning(
+                    "session lock query failed (%s, code %s); using the input-desktop check",
+                    type(error).__name__,
+                    getattr(error, "winerror", None) or error.errno,
+                )
+            return self._input_desktop_locked()
+        self._reported_wts_error = False
+        return flags == WTS_SESSIONSTATE_LOCK
+
+    def _input_desktop_locked(self) -> bool:
         user32, get_last_error = self._api()
         desktop = user32.OpenInputDesktop(0, False, DESKTOP_SWITCHDESKTOP)
         if not desktop:
