@@ -194,7 +194,7 @@ def test_supervisor_manual_reason_and_combinations(clock):
 
 def test_paused_step_never_opens_camera_and_closes_it_first_time(make_rig):
     """Behaviour 3: any reason -> PAUSED, camera not opened, closed after first check."""
-    rig = make_rig()
+    rig = make_rig(camera_mode="hold")  # hold keeps the camera open between samples
     rig.tick(2)
     assert rig.camera.is_open
     rig.lock.locked = True
