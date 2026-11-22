@@ -6,7 +6,7 @@ import pytest
 
 from posture_checker.config import Config
 from posture_checker.platform.windows_list import WindowInfo
-from posture_checker.policy.calls import CallDetector, match_window
+from posture_checker.policy.calls import CallDetector, could_match_title, match_window
 from posture_checker.policy.pausing import PauseSupervisor
 from posture_checker.tray import describe_reason
 
@@ -34,6 +34,9 @@ class Lister:
         ("Call with Ana", "ms-teams.exe", "teams"),
         ("Meeting with Ana | Microsoft Teams", "chrome.exe", None),
         ("Calendar | Microsoft Teams", "Teams.exe", None),
+        ("Meeting without agenda | Microsoft Teams", "ms-teams.exe", None),
+        ("Call without video", "Teams.exe", None),
+        ("Meeting in General", "ms-teams.exe", "teams"),
     ],
 )
 def test_match_window_edges(title: str, process: str, app: str | None) -> None:
@@ -92,3 +95,25 @@ def test_unknown_call_app_described_by_name() -> None:
 def test_config_rejects_non_bool_setting() -> None:
     with pytest.raises(ValueError):
         Config(pause_in_calls="no").validate()  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("error", [OSError("x"), RuntimeError("x"), ValueError("x"), KeyError("x")])
+def test_detector_never_raises(error: Exception) -> None:
+    lister = Lister()
+    lister.error = error
+    assert CallDetector(lister).apps_in_call() == []
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        ("Meet - abc-defg-hij", True),
+        ("Zoom Meeting", True),
+        ("Call with Ana | Microsoft Teams", True),
+        ("Meeting without agenda", False),
+        ("Google Meet", False),
+        ("Inbox - Outlook", False),
+    ],
+)
+def test_title_precheck(title: str, expected: bool) -> None:
+    assert could_match_title(title) is expected

@@ -154,6 +154,8 @@ class PauseSupervisor:
         try:
             value = read()
         except Exception:
+            # log.exception is safe here: no window title can reach it, because
+            # CallDetector catches every listing error itself and returns [].
             if name not in self._failed_probes:
                 self._failed_probes.add(name)
                 log.exception("%s probe failed; ignoring it until it works again", name)
