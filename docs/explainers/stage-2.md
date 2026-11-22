@@ -42,7 +42,7 @@ A: Each probe is wrapped so a failure is logged and treated as "no reason". If t
 A: Tests scan the scripts for image writing and network use, and check that a run leaves only the database, log and config files, with no image data in the log.
 
 ## 5. Limitations to own
-- The registry "in use" rule and the screen-lock error code are unverified until live checks (L2, L3); lock was only tested in the unlocked state.
+- The registry "in use" rule is unverified until live check L2. Lock detection first relied on an undocumented heuristic (the input desktop cannot be opened while locked); L3 showed it held for only about 5 s after Win+L on this build, so the app kept sampling behind the lock screen. It now uses the documented session state API (WTSQuerySessionInformationW, SessionFlags) and keeps the old check only as a fallback if that call fails. The new signal still needs a rerun of L3.
 - Battery Saver and low-battery paths were not tested on a real battery (L5).
 - The tray icon, its refresh, the Tk windows, toasts, the mutex and both install scripts were never run on a real desktop; scripts were only parsed.
 - Camera-in-use detection: during the L1 probe Windows recorded no camera use in the registry for any app, so the "pause during calls" signal did not fire. Burst mode keeps calls working regardless; L2 then confirmed that this Windows build no longer writes those registry values. A second signal was added: the supervisor now also pauses when a visible Meet, Zoom or Teams meeting window is open, matched from window titles and process names (`policy/calls.py`, with the same 10 s grace). Only the app name is kept, never the title. It is a heuristic (active Meet tab only, no Firefox) and is checked in live check L2b.
