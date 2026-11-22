@@ -29,7 +29,7 @@ def controller(tmp_path) -> SettingsController:
     return make_controller(tmp_path)
 
 
-def test_current_includes_autostart(controller) -> None:
+def test_current_includes_autostart(controller, hunch_exe) -> None:
     values = controller.current()
     assert values["alert_window_s"] == 60.0
     assert values["camera_mode"] == "burst"

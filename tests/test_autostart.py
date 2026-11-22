@@ -102,7 +102,7 @@ class FailingWriter:
         subprocess.TimeoutExpired("powershell", 30),
     ],
 )
-def test_settings_reports_writer_failure_and_saves_nothing(tmp_path, error) -> None:
+def test_settings_reports_writer_failure_and_saves_nothing(tmp_path, hunch_exe, error) -> None:
     save_config(Config())
     startup = tmp_path / "Startup"
     controller = settings_ui.SettingsController(
@@ -117,7 +117,7 @@ def test_settings_reports_writer_failure_and_saves_nothing(tmp_path, error) -> N
     assert not autostart.is_autostart_enabled(startup_dir=startup)
 
 
-def test_install_main_reports_writer_failure(monkeypatch, capsys) -> None:
+def test_install_main_reports_writer_failure(monkeypatch, capsys, hunch_exe) -> None:
     from posture_checker import install
     from posture_checker.platform import registry
 

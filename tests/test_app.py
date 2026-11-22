@@ -176,7 +176,7 @@ def test_setup_logging_twice_keeps_one_file_handler() -> None:
                 root.removeHandler(handler)
 
 
-def test_register_then_unregister_leaves_registry_and_startup_empty(tmp_path) -> None:
+def test_register_then_unregister_leaves_registry_and_startup_empty(tmp_path, hunch_exe) -> None:
     registry = FakeRegistry()
     startup = tmp_path / "Startup"
     install.register(registry, writer=FakeShortcutWriter(), startup_dir=startup)
