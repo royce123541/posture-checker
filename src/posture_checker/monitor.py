@@ -172,6 +172,7 @@ class Monitor:
                 self.model.sensitivity = config.sensitivity
             if self.supervisor is not None:
                 self.supervisor.battery_pause_percent = config.battery_pause_percent
+                self.supervisor.pause_in_calls = config.pause_in_calls
 
     @property
     def presence_check(self) -> bool:

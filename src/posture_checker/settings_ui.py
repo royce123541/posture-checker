@@ -37,6 +37,7 @@ FIELDS: dict[str, tuple[str, type]] = {
     "cooldown_s": ("Minimum time between alerts (seconds)", float),
     "battery_pause_percent": ("Pause below battery % when unplugged", int),
     "camera_mode": ("Camera mode (hold or burst)", str),
+    "pause_in_calls": ("Pause during calls", bool),
     "autostart": ("Start at login", bool),
 }
 

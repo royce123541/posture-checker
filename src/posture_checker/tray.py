@@ -16,6 +16,7 @@ from typing import Any
 from posture_checker.policy.pausing import (
     CALIBRATING,
     CAMERA_IN_USE_PREFIX,
+    IN_CALL_PREFIX,
     LOCKED,
     LOW_BATTERY,
     MANUAL,
@@ -100,7 +101,14 @@ def menu_model(state: TrayState) -> list[MenuItem]:
     ]
 
 
+#: Display names for the in_call:<app> reasons (spec C7).
+CALL_APP_NAMES = {"meet": "Google Meet", "zoom": "Zoom", "teams": "Microsoft Teams"}
+
+
 def describe_reason(reason: str) -> str:
+    if reason.startswith(IN_CALL_PREFIX):
+        app = reason[len(IN_CALL_PREFIX) :]
+        return f"in a call ({CALL_APP_NAMES.get(app, app)})"
     if reason.startswith(CAMERA_IN_USE_PREFIX):
         return "camera in use by " + reason[len(CAMERA_IN_USE_PREFIX) :]
     return {

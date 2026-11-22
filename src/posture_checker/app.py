@@ -24,6 +24,8 @@ from posture_checker.monitor import CAMERA_UNAVAILABLE, PAUSED, Monitor, Sample
 from posture_checker.platform.camera_usage import RegistryCameraUsage, filetime_now
 from posture_checker.platform.registry import Registry
 from posture_checker.platform.single_instance import InstanceLock
+from posture_checker.platform.windows_list import WinWindowLister
+from posture_checker.policy.calls import CallDetector
 from posture_checker.policy.pausing import CALIBRATING, PauseSupervisor
 from posture_checker.settings_ui import ConfigWatcher
 from posture_checker.storage.db import Database
@@ -342,6 +344,8 @@ def main() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
         lock_state=WindowsLockState(),
         battery=PsutilBattery(),
         battery_pause_percent=config.battery_pause_percent,
+        calls=CallDetector(WinWindowLister()),
+        pause_in_calls=config.pause_in_calls,
     )
     monitor = Monitor(
         config=config,

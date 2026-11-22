@@ -23,6 +23,7 @@ CALIBRATING = "calibrating"
 LOCKED = "locked"
 LOW_BATTERY = "low_battery"
 CAMERA_IN_USE_PREFIX = "camera_in_use:"
+IN_CALL_PREFIX = "in_call:"
 
 #: After the last other app stops using the camera, wait this long before
 #: taking it back (spec behaviour 5), so a call that briefly toggles video off
@@ -44,6 +45,10 @@ class BatteryStatus:
 
 class CameraUsageProbe(Protocol):
     def apps_in_use(self) -> list[str]: ...
+
+
+class CallProbe(Protocol):
+    def apps_in_call(self) -> list[str]: ...
 
 
 class LockStateProbe(Protocol):
@@ -77,18 +82,25 @@ class PauseSupervisor:
         battery: BatteryProbe,
         clock: Callable[[], float] = time.time,
         battery_pause_percent: int = 20,
+        calls: CallProbe | None = None,
+        pause_in_calls: bool = True,
     ) -> None:
         self.camera_usage = camera_usage
         self.lock_state = lock_state
         self.battery = battery
         self.clock = clock
         self.battery_pause_percent = battery_pause_percent
+        self.calls = calls
+        #: Setting "Pause during calls" (spec C8); False skips the probe entirely.
+        self.pause_in_calls = pause_in_calls
         self._lock = threading.Lock()
         #: None = no manual pause; math.inf = until resumed; else end time.
         self._manual_until: float | None = None
         self._extra: set[str] = set()
         #: App name -> last time it was seen using the camera.
         self._camera_seen: dict[str, float] = {}
+        #: Call app name -> last time its meeting window was seen.
+        self._call_seen: dict[str, float] = {}
         self._battery_paused = False
         self._last = PauseDecision()
         #: Probes whose failure has been logged (cleared once they work again).
@@ -159,6 +171,20 @@ class PauseSupervisor:
                 del self._camera_seen[app]
         return [CAMERA_IN_USE_PREFIX + app for app in sorted(self._camera_seen)]
 
+    def _call_reasons(self, now: float) -> list[str]:
+        if self.calls is None or not self.pause_in_calls:
+            self._call_seen.clear()
+            return []
+        no_apps: list[str] = []
+        for app in self._probe("in-call", self.calls.apps_in_call, no_apps):
+            self._call_seen[app] = now
+        # Same grace as the camera signal (spec C4), so a title flicker while a
+        # tab reloads does not unpause and re-pause.
+        for app, seen in list(self._call_seen.items()):
+            if now - seen >= CAMERA_GRACE_S:
+                del self._call_seen[app]
+        return [IN_CALL_PREFIX + app for app in sorted(self._call_seen)]
+
     def _battery_low(self) -> bool:
         status = self._probe("battery", self.battery.status, BatteryStatus(None, True))
         if status.percent is None:
@@ -186,6 +212,7 @@ class PauseSupervisor:
                 self._manual_until = None  # a timed pause ran out
             reasons.extend(sorted(self._extra))
             reasons.extend(self._camera_reasons(now))
+            reasons.extend(self._call_reasons(now))
             if self._probe("lock", self.lock_state.is_locked, False):
                 reasons.append(LOCKED)
             if self._battery_low():

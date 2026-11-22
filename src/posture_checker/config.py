@@ -50,6 +50,11 @@ class Config:
     #: Pause monitoring below this battery percentage when unplugged.
     battery_pause_percent: int = 20
 
+    # --- Calls --------------------------------------------------------------
+    #: Pause while a Meet, Zoom or Teams meeting window is open (stage 2 call
+    #: detection, C8). On by default; off is the way out of a wrong heuristic.
+    pause_in_calls: bool = True
+
     def validate(self) -> None:
         if self.sample_interval_s <= 0 or self.suspect_interval_s <= 0:
             raise ValueError("sampling intervals must be positive")
@@ -65,6 +70,8 @@ class Config:
             raise ValueError("cooldown_s must not be negative")
         if not 0 <= self.battery_pause_percent <= 100:
             raise ValueError("battery_pause_percent must be between 0 and 100")
+        if not isinstance(self.pause_in_calls, bool):
+            raise ValueError("pause_in_calls must be true or false")
         if self.camera_mode not in CAMERA_MODES:
             raise ValueError(f"camera_mode must be one of {', '.join(CAMERA_MODES)}")
 
