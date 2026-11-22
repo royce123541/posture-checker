@@ -176,7 +176,7 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     from posture_checker.capture.camera import Camera
     from posture_checker.capture.pose import PoseEstimator
-    from posture_checker.inference.rules import RulesModel
+    from posture_checker.inference.rules import load_active
     from posture_checker.monitor import Monitor, Sample
     from posture_checker.platform.windows import ConsoleNotifier, ToastNotifier
     from posture_checker.storage.db import Database
@@ -195,13 +195,25 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("No calibration yet. Run `posture-checker calibrate` first.", file=sys.stderr)
         return 1
 
-    notifier = ConsoleNotifier() if args.no_toast or sys.platform != "win32" else ToastNotifier()
+    notifier: ConsoleNotifier | ToastNotifier
+    if args.no_toast or sys.platform != "win32":
+        notifier = ConsoleNotifier()
+    else:
+        notifier = ToastNotifier()
+        blocked = notifier.blocked_reason()
+        if blocked:
+            print(
+                f"Warning: Windows will not show alert pop-ups because {blocked}. "
+                "Alerts are printed here instead; turn notifications on to get pop-ups.",
+                file=sys.stderr,
+            )
+            notifier = ConsoleNotifier()
     monitor = Monitor(
         config=config,
         db=db,
         source=Camera(config.camera_index, config.frame_width, config.frame_height),
         pose=PoseEstimator(),
-        model=RulesModel(config.sensitivity),
+        model=load_active(config.sensitivity),
         notifier=notifier,
     )
 
@@ -236,6 +248,125 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("\nStopped.")
     finally:
         db.close()
+    return 0
+
+
+def cmd_record(args: argparse.Namespace) -> int:
+    """Guided session: hold each prompted posture while labelled samples are stored."""
+    from posture_checker.capture.pose import PoseEstimator
+    from posture_checker.recording import DEFAULT_STEPS, Step, run_recording
+    from posture_checker.storage.db import Database
+
+    db = Database()
+    calibration = db.latest_calibration()
+    if calibration is None:
+        print("No calibration yet. Run `posture-checker calibrate` first.", file=sys.stderr)
+        db.close()
+        return 1
+    steps = DEFAULT_STEPS
+    if args.seconds is not None:
+        steps = tuple(Step(s.label, s.instruction, args.seconds) for s in steps)
+    total = sum(s.seconds for s in steps)
+    print(f"Guided recording: {len(steps)} postures, about {total / 60:.0f} minutes.")
+    print("Only measurements are stored, never images. Hold each posture until the next prompt.")
+
+    config = load_config()
+    camera = _open_camera(config)
+    if camera is None:
+        db.close()
+        return 1
+    pose = PoseEstimator()
+
+    def on_step(index: int, step: Step) -> None:
+        print(f"\n[{index + 1}/{len(steps)}] {step.instruction}")
+        for n in range(3, 0, -1):
+            print(f"  starting in {n}...", end="\r", flush=True)
+            time.sleep(1)
+
+    def on_progress(fraction: float) -> None:
+        print(f"  recording {fraction * 100:3.0f}%   ", end="\r", flush=True)
+
+    try:
+        summary = run_recording(
+            camera, pose, db, calibration, steps=steps, on_step=on_step, on_progress=on_progress
+        )
+    except KeyboardInterrupt:
+        print("\nStopped early; samples recorded so far are kept.")
+        return 1
+    finally:
+        camera.close()
+        pose.close()
+        db.close()
+    print(f"\nSession {summary.session} saved:")
+    for label, count in summary.counts.items():
+        print(f"  {label:<13} {count} samples")
+    print(f"  skipped (nobody found or low confidence): {summary.skipped_low_confidence}")
+    print("Next: `posture-checker fit-rules` to fit thresholds to this recording.")
+    return 0
+
+
+def cmd_fit_rules(args: argparse.Namespace) -> int:
+    """Fit rule thresholds to recordings, compare with the active rules, deploy if better."""
+    from posture_checker.inference.rules import RulesModel, load_active, save_fitted
+    from posture_checker.mlops import fit_rules as fr
+    from posture_checker.storage.db import Database
+
+    db = Database()
+    sessions = db.recorded_sessions()
+    if not sessions:
+        print("No recordings yet. Run `posture-checker record` first.", file=sys.stderr)
+        db.close()
+        return 1
+    chosen = sessions if args.all else sessions[-1:]
+    samples = db.recorded_samples(chosen)
+    db.close()
+
+    train, test = fr.time_blocked_split(samples)
+    current = load_active(1.0)  # thresholds are fitted at sensitivity 1
+    fitted, fits = fr.fit_thresholds(train, current.thresholds)
+    candidate = RulesModel(1.0, thresholds=fitted, version=fr.next_version(current.version))
+    before = fr.evaluate(current, test)
+    after = fr.evaluate(candidate, test)
+
+    print(f"Sessions: {', '.join(chosen)}  ({len(train)} fitting, {len(test)} held-out samples)\n")
+    print(f"{'threshold':<30}{'old':>8}{'new':>8}  balanced accuracy (fit)")
+    for fit in fits:
+        acc = "-" if fit.train_balanced_accuracy is None else f"{fit.train_balanced_accuracy:.2f}"
+        print(f"{fit.name:<30}{fit.old:>8.3f}{fit.new:>8.3f}  {acc}  {fit.note}")
+
+    def show(name: str, ev: fr.Evaluation) -> None:
+        print(
+            f"\n{name}: accuracy {ev.accuracy:.0%}, good labelled bad {ev.false_bad_rate:.0%}, "
+            f"bad posture detected {ev.bad_detection_rate:.0%}  (n={ev.n})"
+        )
+        print("  true \\ predicted  " + "".join(f"{p:>14}" for p in ev.confusion))
+        for true_label, row in ev.confusion.items():
+            if sum(row.values()):
+                print(f"  {true_label:<18}" + "".join(f"{v:>14}" for v in row.values()))
+
+    show(f"Active ({current.version}) on held-out data", before)
+    show(f"Candidate ({candidate.version}) on held-out data", after)
+
+    if not fr.passes_gate(after, before):
+        print(f"\nCandidate is not better on held-out data; keeping {current.version}")
+        return 2
+    if not args.deploy:
+        print(f"\nCandidate passes the gate. Run with --deploy to make {candidate.version} active.")
+        return 0
+    path = save_fitted(
+        fitted,
+        candidate.version,
+        {
+            "sessions": chosen,
+            "previous_version": current.version,
+            "n_train": len(train),
+            "n_test": len(test),
+            "held_out_before": fr.evaluation_dict(before),
+            "held_out_after": fr.evaluation_dict(after),
+            "fitted_at": time.time(),
+        },
+    )
+    print(f"\nDeployed {candidate.version} -> {path}")
     return 0
 
 
@@ -299,6 +430,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("app", help="run in the background with a tray icon").set_defaults(func=cmd_app)
     sub.add_parser("settings", help="open the settings window").set_defaults(func=cmd_settings)
+
+    record = sub.add_parser("record", help="guided labelled recording of postures")
+    record.add_argument("--seconds", type=float, help="seconds per posture (default 25)")
+    record.set_defaults(func=cmd_record)
+
+    fit = sub.add_parser("fit-rules", help="fit rule thresholds to your recordings")
+    fit.add_argument("--all", action="store_true", help="use every recording, not just the latest")
+    fit.add_argument("--deploy", action="store_true", help="make the fitted rules active if better")
+    fit.set_defaults(func=cmd_fit_rules)
 
     sub.add_parser("mark-wrong", help="mark the latest alert as wrong").set_defaults(
         func=cmd_mark_wrong

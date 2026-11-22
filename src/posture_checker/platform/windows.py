@@ -19,6 +19,14 @@ MESSAGES = {
     TOO_CLOSE: ("You're too close to the screen", "Move back to arm's length."),
 }
 
+#: Windows NotificationSetting values (other than 0, "enabled") and what to tell the user.
+BLOCKED_REASONS = {
+    1: "notifications from Posture Checker are turned off in Settings > System > Notifications",
+    2: "notifications are turned off for your Windows account (Settings > System > Notifications)",
+    3: "notifications are disabled by a group policy on this PC",
+    4: "Windows rejected the app's notification registration",
+}
+
 _ARG_WRONG = "wrong"
 _ARG_PAUSE = "pause"
 _ARG_OPEN = "open"
@@ -56,6 +64,18 @@ class ToastNotifier:
 
         register_aumid()
         self._toaster = InteractableWindowsToaster(APP_DISPLAY_NAME, notifierAUMID=AUMID)
+
+    def blocked_reason(self) -> str | None:
+        """Why Windows would silently drop our toasts, or None if it will show them.
+
+        Windows gives no error when notifications are off; the toast just never
+        appears. Asking up front lets the app say so instead.
+        """
+        try:
+            setting = int(self._toaster.toastNotifier.setting)
+        except OSError:
+            return None  # cannot tell; assume toasts work
+        return BLOCKED_REASONS.get(setting)
 
     def alert(
         self,

@@ -331,7 +331,7 @@ def main() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
     from posture_checker.capture.camera import Camera
     from posture_checker.capture.pose import PoseEstimator
     from posture_checker.config import load_config
-    from posture_checker.inference.rules import RulesModel
+    from posture_checker.inference.rules import load_active
     from posture_checker.platform.power import PsutilBattery, WindowsLockState
     from posture_checker.platform.registry import WinRegistry
 
@@ -348,7 +348,7 @@ def main() -> int:  # pragma: no cover - needs Windows, a webcam and a desktop
         db=db,
         source=Camera(config.camera_index, config.frame_width, config.frame_height),
         pose=PoseEstimator(),
-        model=RulesModel(config.sensitivity),
+        model=load_active(config.sensitivity),
         notifier=notifier,
         supervisor=supervisor,
     )
