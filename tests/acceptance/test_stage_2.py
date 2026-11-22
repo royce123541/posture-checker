@@ -417,6 +417,7 @@ EXPECTED_LABELS = [
     "I'm slouching now",
     "Calibrate...",
     "Settings...",
+    "Open report",
     "Open data folder",
     "Quit",
 ]
